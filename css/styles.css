@@ -609,3 +609,9 @@ main {
 .print-view th, .print-view td { border: 0.2mm solid #bbb; padding: 1mm 1.5mm; text-align: left; vertical-align: top; }
 .print-view th { background: #eee; }
 .print-view .job-total { font-weight: 600; margin: 0 0 4mm; }
+
+/* ---------- match opposite wall ---------- */
+.match-chips { margin-top: 0.5rem; }
+.match-chips:empty { display: none; }
+.chip.match { color: var(--accent); border-color: var(--accent-dim); padding: 0.45rem 0.8rem; font-size: 0.85rem; }
+.chip.match.selected { background: var(--accent-dim); border-color: var(--accent); }

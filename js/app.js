@@ -82,6 +82,7 @@ const els = {
   customAngleInput: $('#customAngleInput'),
   presetChips: $('#presetChips'),
   lengthInputs: $('#lengthInputs'),
+  matchChips: $('#matchChips'),
   wallForm: $('#wallForm'),
   addWallBtn: $('#addWallBtn'),
   wallList: $('#wallList'),
@@ -239,6 +240,39 @@ function setSelectedHeading(h) {
     btn.classList.toggle('selected', btn.dataset.heading === String(h));
   });
   els.customAngleSection.classList.toggle('hidden', h !== 'custom');
+  renderMatchChips();
+}
+
+// Direction on the plan of the wall being entered, from the arrows or Angle.
+function selectedAbsoluteHeading() {
+  const angle = currentWallAngle();
+  if (angle == null) return null;
+  const prev = previousHeading();
+  return prev == null ? angle : prev + angle;
+}
+
+// Offer the length of walls running the opposite way (e.g. Wall 1 when
+// entering Wall 3 of a rectangle), newest first, so only length and width
+// need measuring.
+function renderMatchChips() {
+  els.matchChips.innerHTML = '';
+  const heading = selectedAbsoluteHeading();
+  if (heading == null) return;
+  const headings = wallHeadings();
+  const current = entryIndex();
+  state.walls
+    .map((w, i) => ({ w, i }))
+    .filter(({ i }) => i !== current && Math.abs(normalizeAngle180(headings[i] - heading - 180)) < 0.5)
+    .slice(-2)
+    .reverse()
+    .forEach(({ w, i }) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'chip match';
+      btn.dataset.lengthM = w.lengthM;
+      btn.textContent = `= Wall ${i + 1} · ${units.formatLength(w.lengthM, state.unit)}`;
+      els.matchChips.appendChild(btn);
+    });
 }
 
 // Grey out the arrow that would double straight back along the previous wall.
@@ -288,6 +322,7 @@ function render() {
   els.directionSection.classList.toggle('hidden', firstWallEntry && startHeadingFixed());
   els.directionLabel.textContent = `Direction of Wall ${idx + 1} on the plan`;
   updateDirPad();
+  renderMatchChips();
   const anchorText = anchorDescription(activeRoom());
   els.anchorFormNote.textContent = anchorText;
   els.anchorFormNote.classList.toggle('hidden', !(firstWallEntry && anchorText));
@@ -1122,6 +1157,14 @@ els.lrToggle.addEventListener('click', (e) => {
   const btn = e.target.closest('.lr-btn');
   if (!btn) return;
   setCustomSide(btn.dataset.side);
+  renderMatchChips();
+});
+els.customAngleInput.addEventListener('input', renderMatchChips);
+els.matchChips.addEventListener('click', (e) => {
+  const btn = e.target.closest('.chip.match');
+  if (!btn) return;
+  setLength(state.unit, 'len', Number(btn.dataset.lengthM));
+  [...els.matchChips.children].forEach((c) => c.classList.toggle('selected', c === btn));
 });
 
 els.presetChips.addEventListener('click', (e) => {
@@ -1129,6 +1172,7 @@ els.presetChips.addEventListener('click', (e) => {
   if (!btn) return;
   els.customAngleInput.value = btn.dataset.deg;
   [...els.presetChips.children].forEach((c) => c.classList.toggle('selected', c === btn));
+  renderMatchChips();
 });
 
 els.wallForm.addEventListener('submit', (e) => {
