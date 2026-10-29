@@ -50,6 +50,16 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
   const fontSize = Math.max(width, height) * 0.045;
   const tags = openingTags(walls);
 
+  // Which side of each wall is inside the room: sign of the (closed) shoelace
+  // sum. With y pointing down, a positive sum means the room is on the
+  // right-hand side of the direction of travel, i.e. along (nx, ny) below.
+  let shoelace = 0;
+  points.forEach((p, i) => {
+    const q = points[(i + 1) % points.length];
+    shoelace += p.x * q.y - q.x * p.y;
+  });
+  const insideSign = shoelace >= 0 ? 1 : -1;
+
   const group = el('g');
   svg.appendChild(group);
   const hitGroup = el('g');
@@ -82,6 +92,8 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
 
     // openings: cut a gap in the wall, then draw the symbol and tag
     (w.openings || []).forEach((o) => {
+      let tagPos = null;
+      let tagText = `${tags[o.id]} ${formatLength(o.widthM, unit)}`;
       const span = openingSpan(w, o);
       const s = along(Math.max(span.startM, 0));
       const e = along(Math.min(span.endM, w.lengthM));
@@ -108,17 +120,54 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
             'stroke-width': strokeWidth * 0.3,
           }));
         });
-      } else if (o.type === 'door' || o.type === 'other') {
+      } else if (o.type === 'door') {
+        // leaf from the hinge jamb plus a quarter-circle swing to the other jamb
+        const inX = nx * insideSign;
+        const inY = ny * insideSign;
+        const swingX = o.swing === 'out' ? -inX : inX;
+        const swingY = o.swing === 'out' ? -inY : inY;
+        // "left" as seen standing in the room facing the door
+        const leftX = -inY;
+        const leftY = inX;
+        const sIsLeft = (s.x - e.x) * leftX + (s.y - e.y) * leftY > 0;
+        const hingeLeft = o.hinge !== 'right';
+        const hinge = sIsLeft === hingeLeft ? s : e;
+        const latch = hinge === s ? e : s;
+        const r = Math.hypot(latch.x - hinge.x, latch.y - hinge.y);
+        const tip = { x: hinge.x + swingX * r, y: hinge.y + swingY * r };
+        const cross = (tip.x - hinge.x) * (latch.y - hinge.y) - (tip.y - hinge.y) * (latch.x - hinge.x);
+        group.appendChild(el('line', {
+          x1: hinge.x, y1: hinge.y, x2: tip.x, y2: tip.y,
+          class: 'plan-opening',
+          'stroke-width': strokeWidth * 0.45,
+        }));
+        group.appendChild(el('path', {
+          d: `M ${tip.x} ${tip.y} A ${r} ${r} 0 0 ${cross > 0 ? 1 : 0} ${latch.x} ${latch.y}`,
+          class: 'plan-opening plan-swing',
+          'stroke-width': strokeWidth * 0.3,
+        }));
+        // tag sits inside the swing, clear of the leaf and the arc
+        tagPos = {
+          x: hinge.x + (swingX + (latch.x - hinge.x) / r) * r * 0.42,
+          y: hinge.y + (swingY + (latch.y - hinge.y) / r) * r * 0.42,
+        };
+        tagText = tags[o.id];
+      } else if (o.type === 'other') {
         group.appendChild(el('line', {
           x1: s.x, y1: s.y, x2: e.x, y2: e.y,
-          class: 'plan-opening' + (o.type === 'other' ? ' dotted' : ' dashed'),
+          class: 'plan-opening dotted',
           'stroke-width': strokeWidth * 0.3,
         }));
       }
-      // tag on the opposite side of the wall to the length label
-      const mid = along((Math.max(span.startM, 0) + Math.min(span.endM, w.lengthM)) / 2);
-      const tx = mid.x - nx * fontSize * 0.8;
-      const ty = mid.y - ny * fontSize * 0.8;
+      // other openings are tagged inside the room; wall lengths go outside
+      if (!tagPos) {
+        const mid = along((Math.max(span.startM, 0) + Math.min(span.endM, w.lengthM)) / 2);
+        tagPos = {
+          x: mid.x + nx * insideSign * fontSize * 0.8,
+          y: mid.y + ny * insideSign * fontSize * 0.8,
+        };
+      }
+      const { x: tx, y: ty } = tagPos;
       const tag = el('text', {
         x: tx,
         y: ty,
@@ -128,7 +177,7 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
         transform: `rotate(${textAngle}, ${tx}, ${ty})`,
         class: 'plan-opening-label',
       });
-      tag.textContent = `${tags[o.id]} ${formatLength(o.widthM, unit)}`;
+      tag.textContent = tagText;
       group.appendChild(tag);
     });
 
@@ -142,10 +191,29 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
     });
     group.appendChild(arrow);
 
-    // length label, offset perpendicular to the wall and rotated to run along it
-    const offset = fontSize * 0.9;
-    const lx = mx + nx * offset;
-    const ly = my + ny * offset;
+    // length label outside the room, rotated to run along the wall. Centred
+    // on the wall unless an outward door swing is there, in which case it
+    // moves to the middle of the longest clear stretch.
+    const blocked = (w.openings || [])
+      .filter((o) => o.type === 'door' && o.swing === 'out')
+      .map((o) => openingSpan(w, o))
+      .sort((p, q) => p.startM - q.startM);
+    const labelText = `${i + 1}. ${formatLength(w.lengthM, unit)}`;
+    const halfLabel = labelText.length * fontSize * 0.28; // approx. half the text width
+    let labelAt = w.lengthM / 2;
+    if (blocked.some((sp) => sp.startM < labelAt + halfLabel && sp.endM > labelAt - halfLabel)) {
+      let best = { from: 0, to: 0 };
+      let cursor = 0;
+      blocked.concat([{ startM: w.lengthM, endM: w.lengthM }]).forEach((sp) => {
+        if (sp.startM - cursor > best.to - best.from) best = { from: cursor, to: sp.startM };
+        cursor = Math.max(cursor, sp.endM);
+      });
+      labelAt = (best.from + best.to) / 2;
+    }
+    const labelBase = along(labelAt);
+    const offset = fontSize * 0.9 * -insideSign;
+    const lx = labelBase.x + nx * offset;
+    const ly = labelBase.y + ny * offset;
     const label = el('text', {
       x: lx,
       y: ly,
@@ -155,7 +223,7 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
       transform: `rotate(${textAngle}, ${lx}, ${ly})`,
       class: 'plan-label' + (w.id === selectedWallId ? ' selected' : ''),
     });
-    label.textContent = `${i + 1}. ${formatLength(w.lengthM, unit)}`;
+    label.textContent = labelText;
     group.appendChild(label);
 
     // wide invisible line on top so walls are easy to tap

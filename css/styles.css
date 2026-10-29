@@ -424,7 +424,7 @@ main {
 .plan-hit { stroke: transparent; fill: none; pointer-events: stroke; cursor: pointer; }
 .plan-cut { stroke: var(--surface); stroke-linecap: butt; }
 .plan-opening { stroke: var(--opening); stroke-linecap: butt; }
-.plan-opening.dashed { stroke-dasharray: 0.12 0.08; }
+.plan-swing { fill: none; }
 .plan-opening.dotted { stroke-dasharray: 0.04 0.06; }
 .plan-opening-label { fill: var(--opening); }
 
@@ -439,7 +439,8 @@ main {
 .opening-form .confirm-actions { margin-top: 1rem; }
 #openingTypeButtons .dir-btn { min-height: 44px; }
 #cornerToggle .lr-btn { font-size: 0.85rem; }
-#sillSection.hidden { display: none; }
+#sillSection.hidden,
+#doorSection.hidden { display: none; }
 
 .panel-select,
 .panel-text {

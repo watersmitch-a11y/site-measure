@@ -26,6 +26,8 @@ const ui = {
   editingOpeningId: null,
   openingType: 'door',
   openingCorner: 'start',
+  openingHinge: 'left',
+  openingSwing: 'in',
 };
 
 const MEASURED_TO_KEY = 'siteMeasure.lastMeasuredTo';
@@ -69,6 +71,9 @@ const els = {
   measuredToSelect: $('#measuredToSelect'),
   cornerToggle: $('#cornerToggle'),
   sillSection: $('#sillSection'),
+  doorSection: $('#doorSection'),
+  hingeToggle: $('#hingeToggle'),
+  swingToggle: $('#swingToggle'),
   openingNote: $('#openingNote'),
   openingError: $('#openingError'),
   cancelOpeningBtn: $('#cancelOpeningBtn'),
@@ -534,12 +539,15 @@ function renderOpeningList() {
     const corner = o.fromCorner === 'end' ? corners.end : corners.start;
     const from = corner.charAt(0).toLowerCase() + corner.slice(1);
     const sill = o.type === 'window' || o.sillM ? ` · sill ${units.formatLength(o.sillM || 0, state.unit)}` : '';
+    const door = o.type === 'door'
+      ? ` · hinge ${o.hinge === 'right' ? 'right' : 'left'}, opens ${o.swing === 'out' ? 'out' : 'in'}`
+      : '';
     const warn = op.fitsOnWall(wall, o) ? '' : ' <span class="warn-text">⚠ runs past end of wall</span>';
     li.innerHTML = `
       <div class="wall-idx">${tags[o.id]}</div>
       <div class="wall-info">
         <div class="wall-len">${op.OPENING_TYPES[o.type].label} ${formatSize(o.widthM, o.heightM)}</div>
-        <div class="wall-dir">${units.formatLength(o.offsetM, state.unit)} from ${from}${sill}</div>
+        <div class="wall-dir">${units.formatLength(o.offsetM, state.unit)} from ${from}${sill}${door}</div>
         <div class="wall-dir">${op.MEASURED_TO[o.measuredTo]}${o.note ? ' · ' + escapeHtml(o.note) : ''}${warn}</div>
       </div>
       <button class="edit-btn" data-op-id="${o.id}" title="Edit">&#9998;</button>
@@ -555,6 +563,21 @@ function setOpeningType(type) {
     btn.classList.toggle('selected', btn.dataset.type === type);
   });
   els.sillSection.classList.toggle('hidden', !(type === 'window' || type === 'other'));
+  els.doorSection.classList.toggle('hidden', type !== 'door');
+}
+
+function setToggle(container, attr, value) {
+  [...container.children].forEach((btn) => btn.classList.toggle('selected', btn.dataset[attr] === value));
+}
+
+function setOpeningHinge(hinge) {
+  ui.openingHinge = hinge;
+  setToggle(els.hingeToggle, 'hinge', hinge);
+}
+
+function setOpeningSwing(swing) {
+  ui.openingSwing = swing;
+  setToggle(els.swingToggle, 'swing', swing);
 }
 
 function setOpeningCorner(corner) {
@@ -573,6 +596,8 @@ function showOpeningForm(opening) {
   buildLengthInput($('#sillInputs'), state.unit, 'opSill');
   setOpeningType(opening ? opening.type : 'door');
   setOpeningCorner(opening ? opening.fromCorner : 'start');
+  setOpeningHinge(opening && opening.hinge ? opening.hinge : 'left');
+  setOpeningSwing(opening && opening.swing ? opening.swing : 'in');
   let lastMeasuredTo = 'plaster';
   try {
     lastMeasuredTo = localStorage.getItem(MEASURED_TO_KEY) || 'plaster';
@@ -625,6 +650,10 @@ function handleSaveOpening() {
     sillM,
     note: els.openingNote.value.trim(),
   };
+  if (opening.type === 'door') {
+    opening.hinge = ui.openingHinge;
+    opening.swing = ui.openingSwing;
+  }
 
   if (!op.fitsOnWall(wall, opening)) {
     const available = Math.max(wall.lengthM - offsetM, 0);
@@ -782,6 +811,14 @@ els.openingTypeButtons.addEventListener('click', (e) => {
 els.cornerToggle.addEventListener('click', (e) => {
   const btn = e.target.closest('.lr-btn');
   if (btn) setOpeningCorner(btn.dataset.corner);
+});
+els.hingeToggle.addEventListener('click', (e) => {
+  const btn = e.target.closest('.lr-btn');
+  if (btn) setOpeningHinge(btn.dataset.hinge);
+});
+els.swingToggle.addEventListener('click', (e) => {
+  const btn = e.target.closest('.lr-btn');
+  if (btn) setOpeningSwing(btn.dataset.swing);
 });
 els.openingForm.addEventListener('submit', (e) => {
   e.preventDefault();
