@@ -5,6 +5,7 @@ import { renderPlan } from './render.js';
 import { buildLengthInput, readLength, setLength } from './length-input.js';
 import * as op from './openings.js';
 import * as rm from './rooms.js';
+import { exportPlan } from './export.js';
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -56,9 +57,9 @@ const ui = {
   openingCorner: 'start',
   openingHinge: 'left',
   openingSwing: 'in',
-  hostCorner: 'start',
   placingRoom: false, // waiting for a tap on the plan to start a new room
-  placement: null, // where that tap landed, while the start sheet is open
+  placement: null, // the shared wall tapped, while the new-room sheet is open
+  placementEdited: false, // start/length typed over, so thickness changes leave them
 };
 
 const MEASURED_TO_KEY = 'siteMeasure.lastMeasuredTo';
@@ -115,7 +116,8 @@ const els = {
   anchorFormNote: $('#anchorFormNote'),
   roomPanel: $('#roomPanel'),
   closeRoomPanelBtn: $('#closeRoomPanelBtn'),
-  hostCornerToggle: $('#hostCornerToggle'),
+  sharedStartLabel: $('#sharedStartLabel'),
+  exportBtn: $('#exportBtn'),
   placeBanner: $('#placeBanner'),
   cancelPlaceBtn: $('#cancelPlaceBtn'),
   placeSummary: $('#placeSummary'),
@@ -165,7 +167,7 @@ function anchorDescription(room) {
   const hostName = `${rm.roomLabel(host, roomIndex(host))} · Wall ${wallIdx + 1}`;
   if (!anchor.sides) {
     const corner = anchor.fromCorner === 'end' ? corners.end : corners.start;
-    return `Wall 1 runs along ${hostName}, starting ${fmt(anchor.offsetM)} from ${lower(corner)}, ` +
+    return `Wall 1 is the other side of ${hostName}, starting ${fmt(anchor.offsetM)} from ${lower(corner)}, ` +
       `${fmt(anchor.thicknessM)} wall.`;
   }
   const fromEnd = anchor.offsetM > wall.lengthM / 2;
@@ -182,7 +184,7 @@ function describeWall(wall, index) {
     if (anchor.type === 'wall') {
       const host = state.rooms.find((r) => r.id === anchor.roomId);
       const hostWall = host ? host.walls.findIndex((w) => w.id === anchor.wallId) + 1 : '?';
-      return host ? `Along ${rm.roomLabel(host, roomIndex(host))} · Wall ${hostWall}` : 'Along shared wall';
+      return host ? `Shared with ${rm.roomLabel(host, roomIndex(host))} · Wall ${hostWall}` : 'Shared wall';
     }
     return 'Start position fixed';
   }
@@ -298,7 +300,7 @@ function render() {
   renderPlan(els.planSvg, state.rooms, state.unit, {
     activeRoomId: state.activeRoomId,
     selectedWallId: ui.panelWallId,
-    previewPoint: previewPoint(),
+    previewLine: previewLine(),
   });
   renderStats();
   renderWallList();
@@ -902,11 +904,6 @@ function setActiveRoom(id) {
 
 // ---------- placing a new room by tapping the plan ----------
 
-function setHostCorner(corner) {
-  ui.hostCorner = corner;
-  setToggle(els.hostCornerToggle, 'corner', corner);
-}
-
 function startPlacing() {
   if (allWalls().length === 0) {
     // nothing drawn to place against yet
@@ -934,15 +931,13 @@ function svgPoint(e) {
   return ctm ? new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse()) : null;
 }
 
-// Where a tap on the plan should start a new room: snapped to the nearest
-// wall (and to a corner when close to one), or a free point in open space.
-// The side of each nearby wall the tap is on decides whether the new room
-// backs onto that wall (tap outside the room: move off it by the wall
-// thickness) or carries on in line with it (tap inside: no move).
+// A tap on the plan while adding a room: the nearest wall within reach is the
+// shared wall, and the side of it tapped is where the new room goes. Open
+// space starts a separate room there.
 function placementFromTap(pt) {
   const pointsById = rm.computeRoomPoints(state.rooms);
   const vb = els.planSvg.viewBox.baseVal;
-  const fontSize = Math.max(vb.width, vb.height) * 0.045; // as in render.js
+  const reach = Math.max(vb.width, vb.height) * 0.045; // a label's height, as in render.js
   let best = null;
   state.rooms.forEach((room) => {
     const pts = pointsById.get(room.id);
@@ -954,32 +949,13 @@ function placementFromTap(pt) {
       const uy = (b.y - a.y) / len;
       const t = Math.max(0, Math.min(len, (pt.x - a.x) * ux + (pt.y - a.y) * uy));
       const d = Math.hypot(pt.x - (a.x + ux * t), pt.y - (a.y + uy * t));
-      if (d <= fontSize && (!best || d < best.d)) best = { room, wallIdx: i, t, d, len, pts };
+      if (d <= reach && (!best || d < best.d)) {
+        const side = (pt.x - a.x) * -uy + (pt.y - a.y) * ux >= 0 ? 1 : -1;
+        best = { d, roomId: room.id, wallId: wall.id, side };
+      }
     });
   });
-  if (!best) return { type: 'free', x: pt.x, y: pt.y };
-
-  const { room, wallIdx, len, pts } = best;
-  const a = pts[wallIdx];
-  const b = pts[wallIdx + 1];
-  let offsetM = Math.round(best.t * 100) / 100; // nearest 10 mm
-  if (Math.hypot(pt.x - a.x, pt.y - a.y) <= fontSize * 1.2) offsetM = 0;
-  else if (Math.hypot(pt.x - b.x, pt.y - b.y) <= fontSize * 1.2) offsetM = len;
-
-  const sign = rm.insideSign(pts);
-  const n = room.walls.length;
-  const nearby = new Set([wallIdx]);
-  if (wallIdx > 0 || isShapeClosed(room.walls)) nearby.add((wallIdx - 1 + n) % n);
-  if (wallIdx < n - 1 || isShapeClosed(room.walls)) nearby.add((wallIdx + 1) % n);
-  const sides = {};
-  nearby.forEach((idx) => {
-    const p = pts[idx];
-    const q = pts[idx + 1];
-    const L = Math.hypot(q.x - p.x, q.y - p.y) || 1;
-    const side = (pt.x - p.x) * (-(q.y - p.y) / L) + (pt.y - p.y) * ((q.x - p.x) / L) >= 0 ? 1 : -1;
-    sides[room.walls[idx].id] = side === -sign ? side : 0;
-  });
-  return { type: 'wall', roomId: room.id, wallId: room.walls[wallIdx].id, offsetM, sides };
+  return best ? { type: 'wall', roomId: best.roomId, wallId: best.wallId, side: best.side } : { type: 'free' };
 }
 
 function handlePlacementTap(e) {
@@ -1001,51 +977,75 @@ function placementHost() {
   return wallIdx >= 0 ? { room, wallIdx, wall: room.walls[wallIdx] } : null;
 }
 
+// Fill the start and length fields with the shared part of the wall for the
+// thickness entered (see rm.sharedWallSpan).
+function fillSharedSpan() {
+  const host = placementHost();
+  if (!host) return;
+  const thick = readLength(state.unit, 'thick', { allowZero: true }) ?? rm.DEFAULT_WALL_THICKNESS_M;
+  const pts = rm.computeRoomPoints(state.rooms).get(host.room.id);
+  const span = rm.sharedWallSpan(pts, host.room.walls, host.wallIdx, ui.placement.side, thick, isShapeClosed(host.room.walls));
+  setLength(state.unit, 'anchorOff', Math.round(span.startM * 1000) / 1000);
+  setLength(state.unit, 'sharedLen', Math.round(span.lengthM * 1000) / 1000);
+}
+
 function openPlacementSheet() {
-  const p = ui.placement;
   const host = placementHost();
   if (!host) return;
   const corners = cornerLabels(host.wallIdx, host.room.walls);
-  els.hostCornerToggle.querySelector('[data-corner="start"]').textContent = corners.start;
-  els.hostCornerToggle.querySelector('[data-corner="end"]').textContent = corners.end;
-  const fromEnd = p.offsetM > host.wall.lengthM / 2;
-  setHostCorner(fromEnd ? 'end' : 'start');
-  buildLengthInput($('#anchorOffsetInputs'), state.unit, 'anchorOff');
-  setLength(state.unit, 'anchorOff', fromEnd ? host.wall.lengthM - p.offsetM : p.offsetM);
+  const startCorner = corners.start.charAt(0).toLowerCase() + corners.start.slice(1);
+  els.sharedStartLabel.textContent = `Shared part starts this far from ${startCorner}`;
   buildLengthInput($('#thicknessInputs'), state.unit, 'thick');
   setLength(state.unit, 'thick', rm.DEFAULT_WALL_THICKNESS_M);
-  const backsOnto = Object.values(p.sides).some((v) => v);
+  buildLengthInput($('#anchorOffsetInputs'), state.unit, 'anchorOff');
+  buildLengthInput($('#sharedLengthInputs'), state.unit, 'sharedLen');
+  ui.placementEdited = false;
+  fillSharedSpan();
   els.placeSummary.textContent =
-    `${rm.roomLabel(host.room, roomIndex(host.room))} · Wall ${host.wallIdx + 1} ` +
-    `(${units.formatLength(host.wall.lengthM, state.unit)}), ` +
-    (backsOnto ? 'new room on the other side of the wall.' : 'new room starts on the inside face.');
+    `Wall 1 of the new room will be the other side of ${rm.roomLabel(host.room, roomIndex(host.room))} · ` +
+    `Wall ${host.wallIdx + 1} (${units.formatLength(host.wall.lengthM, state.unit)}).`;
   els.roomError.classList.add('hidden');
   els.roomPanel.classList.remove('hidden');
   render();
 }
 
-// The anchor the start sheet describes right now (inputs as typed).
-function placementAnchor() {
+// The new room's anchor and shared Wall 1 length as the sheet describes them.
+function placementDraft() {
   const p = ui.placement;
   const host = placementHost();
-  if (!host) return null;
-  let offsetM = p.offsetM;
-  let thicknessM = rm.DEFAULT_WALL_THICKNESS_M;
-  if (!els.roomPanel.classList.contains('hidden')) {
-    const dist = readLength(state.unit, 'anchorOff', { allowZero: true });
-    const thick = readLength(state.unit, 'thick', { allowZero: true });
-    if (dist != null) offsetM = ui.hostCorner === 'end' ? host.wall.lengthM - dist : dist;
-    if (thick != null) thicknessM = thick;
-  }
-  return { type: 'wall', roomId: p.roomId, wallId: p.wallId, offsetM, thicknessM, sides: p.sides };
+  if (!host || els.roomPanel.classList.contains('hidden')) return null;
+  const offsetM = readLength(state.unit, 'anchorOff', { allowZero: true });
+  const lengthM = readLength(state.unit, 'sharedLen');
+  const thicknessM = readLength(state.unit, 'thick', { allowZero: true });
+  return {
+    host,
+    offsetM,
+    lengthM,
+    thicknessM,
+    anchor: {
+      type: 'wall',
+      roomId: p.roomId,
+      wallId: p.wallId,
+      fromCorner: 'start',
+      offsetM: offsetM ?? 0,
+      thicknessM: thicknessM ?? rm.DEFAULT_WALL_THICKNESS_M,
+      side: p.side,
+    },
+  };
 }
 
-function previewPoint() {
-  if (!ui.placement) return null;
-  const anchor = placementAnchor();
-  if (!anchor) return null;
-  const frame = rm.computeFrames([...state.rooms, { id: '__preview', walls: [], anchor }]).get('__preview');
-  return { x: frame.x, y: frame.y };
+// The shared wall the new room will get, drawn on the plan while placing.
+function previewLine() {
+  const draft = ui.placement && placementDraft();
+  if (!draft || !draft.lengthM) return null;
+  const frame = rm.computeFrames([...state.rooms, { id: '__preview', walls: [], anchor: draft.anchor }]).get('__preview');
+  const rad = (frame.heading * Math.PI) / 180;
+  return {
+    x1: frame.x,
+    y1: frame.y,
+    x2: frame.x + draft.lengthM * Math.sin(rad),
+    y2: frame.y - draft.lengthM * Math.cos(rad),
+  };
 }
 
 function closeRoomPanel() {
@@ -1060,21 +1060,27 @@ function showRoomError(message) {
 }
 
 function handleCreateRoom() {
-  const host = placementHost();
-  if (!host) return;
-  const dist = readLength(state.unit, 'anchorOff', { allowZero: true });
-  const thick = readLength(state.unit, 'thick', { allowZero: true });
-  if (dist == null) return showRoomError('Enter the distance from the corner (0 to start at the corner).');
-  if (thick == null) return showRoomError('Enter the wall thickness.');
-  if (dist > host.wall.lengthM + 0.001) {
-    return showRoomError(`That's past the end of the wall (${units.formatLength(host.wall.lengthM, state.unit)}).`);
+  const draft = placementDraft();
+  if (!draft) return;
+  const { host, offsetM, lengthM, thicknessM } = draft;
+  if (thicknessM == null) return showRoomError('Enter the wall thickness.');
+  if (offsetM == null) return showRoomError('Enter where the shared part starts (0 for the corner).');
+  if (lengthM == null) return showRoomError('Enter the shared length.');
+  if (offsetM + lengthM > host.wall.lengthM + 0.001) {
+    return showRoomError(`That runs past the end of the wall (${units.formatLength(host.wall.lengthM, state.unit)}).`);
   }
-  createRoom(placementAnchor());
+  createRoom(draft.anchor, [{
+    id: uid(),
+    lengthM,
+    angle: 0, // direction comes from the shared wall
+    sharedWith: { roomId: host.room.id, wallId: host.wall.id },
+  }]);
 }
 
-function createRoom(anchor) {
+function createRoom(anchor, walls = []) {
   stopPlacing();
   const room = rm.newRoom(anchor);
+  room.walls = walls;
   state.rooms.push(room);
   setActiveRoom(room.id);
   els.entryTitle.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1133,6 +1139,11 @@ els.undoBtn.addEventListener('click', handleUndo);
 els.closePolygonBtn.addEventListener('click', handleClosePolygon);
 els.newJobBtn.addEventListener('click', handleNewJob);
 els.saveJobBtn.addEventListener('click', handleSaveJob);
+els.exportBtn.addEventListener('click', () => {
+  if (allWalls().length === 0) return;
+  persist();
+  exportPlan({ name: state.jobName, unit: state.unit, rooms: state.rooms }, { cornerLabels });
+});
 
 els.wallList.addEventListener('click', (e) => {
   const editBtn = e.target.closest('.edit-btn');
@@ -1277,17 +1288,16 @@ els.cancelRoomBtn.addEventListener('click', closeRoomPanel);
 els.roomPanel.addEventListener('click', (e) => {
   if (e.target === els.roomPanel) closeRoomPanel();
 });
-els.hostCornerToggle.addEventListener('click', (e) => {
-  const btn = e.target.closest('.lr-btn');
-  if (!btn || btn.dataset.corner === ui.hostCorner) return;
-  // keep the same point: re-express the distance from the other corner
-  const host = placementHost();
-  const dist = readLength(state.unit, 'anchorOff', { allowZero: true });
-  setHostCorner(btn.dataset.corner);
-  if (host && dist != null) setLength(state.unit, 'anchorOff', Math.max(host.wall.lengthM - dist, 0));
+// thickness changes re-work the shared part until it's been edited by hand
+$('#thicknessInputs').addEventListener('input', () => {
+  if (!ui.placementEdited) fillSharedSpan();
+  render();
 });
-['#anchorOffsetInputs', '#thicknessInputs'].forEach((sel) => {
-  $(sel).addEventListener('input', () => render());
+['#anchorOffsetInputs', '#sharedLengthInputs'].forEach((sel) => {
+  $(sel).addEventListener('input', () => {
+    ui.placementEdited = true;
+    render();
+  });
 });
 els.createRoomBtn.addEventListener('click', handleCreateRoom);
 

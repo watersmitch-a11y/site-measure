@@ -31,6 +31,7 @@
       </select>
       <button id="newJobBtn" class="text-btn">New Job</button>
       <button id="saveJobBtn" class="text-btn">Save</button>
+      <button id="exportBtn" class="text-btn">Export</button>
     </div>
   </header>
 
@@ -38,7 +39,7 @@
     <div id="roomTabs" class="room-tabs"></div>
 
     <div id="placeBanner" class="place-banner hidden">
-      <span>Tap where the new room starts: a corner, a wall, or open space.</span>
+      <span>Tap the shared wall, on the side the new room is on. Or tap open space for a separate room.</span>
       <button id="cancelPlaceBtn" type="button" class="text-btn">Cancel</button>
     </div>
 
@@ -208,25 +209,22 @@
 <div id="roomPanel" class="jobs-panel hidden">
     <div class="jobs-panel-inner wall-panel-inner">
       <div class="jobs-panel-header">
-        <h2>New Room Start</h2>
+        <h2>New Room</h2>
         <button id="closeRoomPanelBtn" class="icon-btn">&times;</button>
       </div>
 
       <p id="placeSummary" class="anchor-note"></p>
 
-      <div class="field-label">Measured from</div>
-      <div class="lr-toggle" id="hostCornerToggle">
-        <button type="button" class="lr-btn" data-corner="start">Start corner</button>
-        <button type="button" class="lr-btn" data-corner="end">End corner</button>
-      </div>
-
-      <div class="field-label">Distance along the wall</div>
-      <div id="anchorOffsetInputs" class="length-inputs"></div>
-
       <div class="field-label">Wall thickness</div>
       <div id="thicknessInputs" class="length-inputs"></div>
 
-      <p class="hint-text">Then pick Wall 1's direction with the arrows and walk the room as normal.</p>
+      <div class="field-label" id="sharedStartLabel">Shared part starts from corner</div>
+      <div id="anchorOffsetInputs" class="length-inputs"></div>
+
+      <div class="field-label">Shared length (Wall 1 of the new room)</div>
+      <div id="sharedLengthInputs" class="length-inputs"></div>
+
+      <p class="hint-text">Wall 1 is added for you. Then walk the rest of the room with the arrows and tap Complete Perimeter to close it onto the shared wall.</p>
 
       <p id="roomError" class="error-text hidden"></p>
 
@@ -236,6 +234,8 @@
       </div>
     </div>
   </div>
+
+<div id="printView" class="print-view"></div>
 
 <script type="module" src="js/app.js"></script>
 </body>

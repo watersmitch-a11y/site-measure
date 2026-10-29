@@ -15,8 +15,14 @@
 //                                          neighbours only counting when the
 //                                          point is at their shared corner.
 //                                          Wall 1's direction is the room's own.
-//   Older rooms stored { fromCorner, offsetM, thicknessM } without sides;
-//   for those Wall 1 runs along the host wall, away from that corner.
+//   { type: 'wall', roomId, wallId, fromCorner, offsetM, thicknessM, side }
+//                                          Wall 1 is the far face of a shared
+//                                          wall: it starts offsetM along the
+//                                          host wall (from fromCorner) and runs
+//                                          along it, moved off it by the wall
+//                                          thickness towards `side` (+1/-1 of
+//                                          the host wall's normal). Rooms from
+//                                          before `side` existed go outward.
 
 import { computePoints } from './geometry.js';
 
@@ -86,10 +92,11 @@ function attachedFrame(hostPoints, wallIndex, anchor) {
   const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
   const ux = (b.x - a.x) / len;
   const uy = (b.y - a.y) / len;
-  const sign = insideSign(hostPoints);
-  // outward normal of the host room
-  const ox = uy * sign;
-  const oy = -ux * sign;
+  // move off the host wall towards the new room: the side tapped, or for
+  // older rooms the host's outside
+  const side = anchor.side ?? -insideSign(hostPoints);
+  const ox = -uy * side;
+  const oy = ux * side;
   const fromEnd = anchor.fromCorner === 'end';
   const base = fromEnd
     ? { x: b.x - ux * anchor.offsetM, y: b.y - uy * anchor.offsetM }
@@ -101,6 +108,45 @@ function attachedFrame(hostPoints, wallIndex, anchor) {
     y: base.y + oy * anchor.thicknessM,
     heading: (Math.atan2(dx, -dy) * 180) / Math.PI,
   };
+}
+
+// The part of a host wall that a new room on `side` of it shares, as
+// { startM, lengthM } along the host wall from its start. At each end, if the
+// host's neighbouring wall runs into the new room (an inside corner from the
+// new room's point of view, like the notch of an L), the shared part stops
+// short by the wall thickness; if it carries on in line or turns away (like
+// a continuous front wall) it runs right to the corner.
+export function sharedWallSpan(hostPoints, hostWalls, wallIdx, side, thicknessM, closed) {
+  const n = hostWalls.length;
+  const a = hostPoints[wallIdx];
+  const b = hostPoints[wallIdx + 1];
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const u = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
+  const toRoom = { x: -u.y * side, y: u.x * side };
+  // trim needed where a neighbouring wall leaves the corner along `dir`
+  const trimFor = (dir) => {
+    const into = dir.x * toRoom.x + dir.y * toRoom.y;
+    if (into <= 0.01) return 0;
+    const sin = Math.abs(u.x * dir.y - u.y * dir.x);
+    return thicknessM / Math.max(sin, 0.2);
+  };
+  const dirOf = (idx, from, to) => {
+    const p = hostPoints[from];
+    const q = hostPoints[to];
+    const l = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+    return { x: (q.x - p.x) / l, y: (q.y - p.y) / l };
+  };
+  let startTrim = 0;
+  let endTrim = 0;
+  if (wallIdx > 0 || closed) {
+    const prev = (wallIdx - 1 + n) % n;
+    startTrim = trimFor(dirOf(prev, prev + 1, prev)); // from the corner back along the previous wall
+  }
+  if (wallIdx < n - 1 || closed) {
+    const next = (wallIdx + 1) % n;
+    endTrim = trimFor(dirOf(next, next, next + 1));
+  }
+  return { startM: startTrim, lengthM: Math.max(len - startTrim - endTrim, 0) };
 }
 
 // Map of room id -> frame { x, y, heading } for every room in the job.

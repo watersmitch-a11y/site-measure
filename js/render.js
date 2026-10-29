@@ -1,5 +1,5 @@
-import { computePoints, boundingBox, closingGap } from './geometry.js';
-import { formatLength } from './units.js';
+import { computePoints, boundingBox, closingGap, area } from './geometry.js';
+import { formatLength, formatArea } from './units.js';
 import { openingSpan, openingTags } from './openings.js';
 import { computeFrames, insideSign as roomInsideSign, roomLabel } from './rooms.js';
 
@@ -21,7 +21,9 @@ function readableAngle(angle) {
 
 // Renders every room of the job. The active room gets full detail (lengths,
 // arrows, start/end markers); other rooms are drawn dimmed with their name.
-export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWallId = null, previewPoint = null } = {}) {
+// For print, every room is dimensioned, with lengths inside each room so
+// shared walls don't put two labels in the same gap, and no arrows/markers.
+export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWallId = null, previewLine = null, print = false } = {}) {
   svg.innerHTML = '';
 
   const frames = computeFrames(rooms);
@@ -52,12 +54,18 @@ export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWall
 
   svg.setAttribute('viewBox', `${viewMinX} ${viewMinY} ${width} ${height}`);
 
-  const strokeWidth = Math.max(width, height) * 0.012;
-  const fontSize = Math.max(width, height) * 0.045;
+  // print is viewed much larger than a phone screen, so finer lines and text
+  const strokeWidth = Math.max(width, height) * (print ? 0.005 : 0.012);
+  const fontSize = Math.max(width, height) * (print ? 0.024 : 0.045);
   const tags = openingTags(rooms.flatMap((r) => r.walls));
 
   const hitGroup = el('g');
-  const ctx = { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup };
+  const ctx = { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup, print };
+
+  if (print) {
+    rooms.forEach((r, i) => drawRoom(svg, r, i, roomPoints.get(r.id), true, ctx));
+    return;
+  }
 
   // inactive rooms first so the active room draws on top
   rooms
@@ -70,12 +78,17 @@ export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWall
     drawRoom(svg, activeRoom, rooms.indexOf(activeRoom), roomPoints.get(activeRoom.id), true, ctx);
   }
 
-  // where a new room will start, while it's being placed
-  if (previewPoint) {
+  // the shared wall a new room will get, while it's being placed
+  if (previewLine) {
+    svg.appendChild(el('line', {
+      ...previewLine,
+      class: 'plan-preview-line',
+      'stroke-width': strokeWidth * 1.2,
+    }));
     svg.appendChild(el('circle', {
-      cx: previewPoint.x,
-      cy: previewPoint.y,
-      r: fontSize * 0.45,
+      cx: previewLine.x1,
+      cy: previewLine.y1,
+      r: fontSize * 0.4,
       class: 'plan-preview',
       'stroke-width': strokeWidth * 0.5,
     }));
@@ -85,7 +98,7 @@ export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWall
 }
 
 function drawRoom(svg, room, roomIndex, points, active, ctx) {
-  const { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup } = ctx;
+  const { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup, print } = ctx;
   const walls = room.walls;
   const group = el('g', { class: active ? 'plan-room active' : 'plan-room dim' });
   svg.appendChild(group);
@@ -215,18 +228,22 @@ function drawRoom(svg, room, roomIndex, points, active, ctx) {
       // direction arrowhead at midpoint
       const mx = (a.x + b.x) / 2;
       const my = (a.y + b.y) / 2;
-      const arrow = el('path', {
-        d: `M ${-fontSize * 0.35} ${-fontSize * 0.35} L ${fontSize * 0.35} 0 L ${-fontSize * 0.35} ${fontSize * 0.35} Z`,
-        transform: `translate(${mx}, ${my}) rotate(${angle})`,
-        class: 'plan-arrow',
-      });
-      group.appendChild(arrow);
+      if (!print) {
+        const arrow = el('path', {
+          d: `M ${-fontSize * 0.35} ${-fontSize * 0.35} L ${fontSize * 0.35} 0 L ${-fontSize * 0.35} ${fontSize * 0.35} Z`,
+          transform: `translate(${mx}, ${my}) rotate(${angle})`,
+          class: 'plan-arrow',
+        });
+        group.appendChild(arrow);
+      }
 
-      // length label outside the room, rotated to run along the wall. Centred
-      // on the wall unless an outward door swing is there, in which case it
-      // moves to the middle of the longest clear stretch.
+      // length label outside the room (inside for print), rotated to run
+      // along the wall. Centred on the wall unless a door swings into that
+      // side, in which case it moves to the middle of the longest clear stretch.
+      const labelSide = print ? insideSign : -insideSign;
+      const swingOnLabelSide = print ? 'in' : 'out';
       const blocked = (w.openings || [])
-        .filter((o) => o.type === 'door' && o.swing === 'out')
+        .filter((o) => o.type === 'door' && (o.swing || 'in') === swingOnLabelSide)
         .map((o) => openingSpan(w, o))
         .sort((p, q) => p.startM - q.startM);
       const labelText = `${i + 1}. ${formatLength(w.lengthM, unit)}`;
@@ -242,7 +259,7 @@ function drawRoom(svg, room, roomIndex, points, active, ctx) {
         labelAt = (best.from + best.to) / 2;
       }
       const labelBase = along(labelAt);
-      const offset = fontSize * 0.9 * -insideSign;
+      const offset = fontSize * 0.9 * labelSide;
       const lx = labelBase.x + nx * offset;
       const ly = labelBase.y + ny * offset;
       const label = el('text', {
@@ -301,9 +318,21 @@ function drawRoom(svg, room, roomIndex, points, active, ctx) {
     });
     name.textContent = roomLabel(room, roomIndex);
     group.appendChild(name);
+    if (print) {
+      const sub = el('text', {
+        x: cx,
+        y: cy + fontSize * 1.1,
+        'text-anchor': 'middle',
+        'dominant-baseline': 'central',
+        'font-size': fontSize * 0.8,
+        class: 'plan-room-name',
+      });
+      sub.textContent = formatArea(area(walls), unit);
+      group.appendChild(sub);
+    }
   }
 
-  if (!active) return;
+  if (!active || print) return;
 
   // closing gap indicator (dashed) if shape isn't closed and has 3+ walls
   const gap = closingGap(walls);
