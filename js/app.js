@@ -47,10 +47,8 @@ function activeLabel() {
 }
 
 const ui = {
-  selectedTurn: 0, // number in degrees, or 'custom'
+  selectedHeading: null, // direction on the plan in degrees (0 up, 90 right…), or 'custom'
   customSide: 'left',
-  customDeg: null,
-  startHeading: 0,
   editingId: null,
   panelWallId: null, // wall whose details panel is open
   editingOpeningId: null,
@@ -58,8 +56,9 @@ const ui = {
   openingCorner: 'start',
   openingHinge: 'left',
   openingSwing: 'in',
-  roomPlace: 'attach',
   hostCorner: 'start',
+  placingRoom: false, // waiting for a tap on the plan to start a new room
+  placement: null, // where that tap landed, while the start sheet is open
 };
 
 const MEASURED_TO_KEY = 'siteMeasure.lastMeasuredTo';
@@ -74,13 +73,13 @@ const els = {
   statsBar: $('#statsBar'),
   entryTitle: $('#entryTitle'),
   directionSection: $('#directionSection'),
-  turnButtons: $('#turnButtons'),
+  dirPad: $('#dirPad'),
+  directionLabel: $('#directionLabel'),
+  customAngleLabel: $('#customAngleLabel'),
   customAngleSection: $('#customAngleSection'),
   lrToggle: $('#lrToggle'),
   customAngleInput: $('#customAngleInput'),
   presetChips: $('#presetChips'),
-  startDirectionSection: $('#startDirectionSection'),
-  startButtons: $('#startButtons'),
   lengthInputs: $('#lengthInputs'),
   wallForm: $('#wallForm'),
   addWallBtn: $('#addWallBtn'),
@@ -114,14 +113,13 @@ const els = {
   deleteRoomBtn: $('#deleteRoomBtn'),
   roomAnchorNote: $('#roomAnchorNote'),
   anchorFormNote: $('#anchorFormNote'),
-  addRoomFromWallBtn: $('#addRoomFromWallBtn'),
   roomPanel: $('#roomPanel'),
   closeRoomPanelBtn: $('#closeRoomPanelBtn'),
-  roomPlaceToggle: $('#roomPlaceToggle'),
-  attachSection: $('#attachSection'),
-  hostWallSelect: $('#hostWallSelect'),
   hostCornerToggle: $('#hostCornerToggle'),
-  separateHint: $('#separateHint'),
+  placeBanner: $('#placeBanner'),
+  cancelPlaceBtn: $('#cancelPlaceBtn'),
+  placeSummary: $('#placeSummary'),
+  planWrap: $('.plan-wrap'),
   roomError: $('#roomError'),
   cancelRoomBtn: $('#cancelRoomBtn'),
   createRoomBtn: $('#createRoomBtn'),
@@ -143,11 +141,14 @@ function headingName(angle) {
   return `${a.toFixed(0)}°`;
 }
 
-// True when the active room's start direction comes from where it was placed
-// (attached to another room's wall) rather than the Up/Down/Left/Right choice.
+// True when Wall 1's direction comes from how the room was placed rather than
+// the arrows: rooms attached along a wall before tap-to-place existed, and
+// rooms pinned in place after their host was deleted.
 function startHeadingFixed() {
   const anchor = activeRoom().anchor;
-  return !!anchor && (anchor.type === 'wall' || (anchor.type === 'fixed' && anchor.heading != null));
+  if (!anchor) return false;
+  if (anchor.type === 'wall') return !anchor.sides;
+  return anchor.type === 'fixed' && anchor.heading != null;
 }
 
 function anchorDescription(room) {
@@ -156,12 +157,24 @@ function anchorDescription(room) {
   const host = state.rooms.find((r) => r.id === anchor.roomId);
   if (!host) return '';
   const wallIdx = host.walls.findIndex((w) => w.id === anchor.wallId);
+  if (wallIdx < 0) return '';
+  const wall = host.walls[wallIdx];
   const corners = cornerLabels(wallIdx, host.walls);
-  const corner = anchor.fromCorner === 'end' ? corners.end : corners.start;
-  return `Next to ${rm.roomLabel(host, roomIndex(host))} · Wall ${wallIdx + 1}, ` +
-    `starting ${units.formatLength(anchor.offsetM, state.unit)} from ${corner.charAt(0).toLowerCase() + corner.slice(1)}, ` +
-    `${units.formatLength(anchor.thicknessM, state.unit)} wall.`;
+  const lower = (t) => t.charAt(0).toLowerCase() + t.slice(1);
+  const fmt = (m) => units.formatLength(m, state.unit);
+  const hostName = `${rm.roomLabel(host, roomIndex(host))} · Wall ${wallIdx + 1}`;
+  if (!anchor.sides) {
+    const corner = anchor.fromCorner === 'end' ? corners.end : corners.start;
+    return `Wall 1 runs along ${hostName}, starting ${fmt(anchor.offsetM)} from ${lower(corner)}, ` +
+      `${fmt(anchor.thicknessM)} wall.`;
+  }
+  const fromEnd = anchor.offsetM > wall.lengthM / 2;
+  const dist = fromEnd ? wall.lengthM - anchor.offsetM : anchor.offsetM;
+  const thick = Object.values(anchor.sides).some((v) => v) ? `, ${fmt(anchor.thicknessM)} wall` : '';
+  return `Starts on ${hostName}, ${fmt(dist)} from ${lower(fromEnd ? corners.end : corners.start)}${thick}.`;
 }
+
+const ARROWS = { Up: '↑', Right: '→', Down: '↓', Left: '←' };
 
 function describeWall(wall, index) {
   if (index === 0 && startHeadingFixed()) {
@@ -173,10 +186,10 @@ function describeWall(wall, index) {
     }
     return 'Start position fixed';
   }
-  if (index === 0) return `Start facing ${headingName(wall.angle)}`;
-  if (Math.abs(wall.angle) < 0.01) return 'Straight';
-  const side = wall.angle > 0 ? 'Right' : 'Left';
-  return `${side} ${Math.abs(wall.angle).toFixed(0)}°`;
+  const name = headingName(wallHeadings()[index]);
+  if (ARROWS[name]) return `${ARROWS[name]} ${name}`;
+  if (index === 0) return `${name} clockwise from up`;
+  return `Turned ${wall.angle > 0 ? 'right' : 'left'} ${Math.abs(wall.angle).toFixed(0)}°`;
 }
 
 // ---------- length input rendering ----------
@@ -199,20 +212,44 @@ function clearLengthInputs() {
 }
 
 // ---------- direction UI ----------
+// Each wall is picked by its direction on the plan (the arrow pad) and stored
+// as a turn from the previous wall; Wall 1 stores its direction outright.
 
-function setSelectedTurn(turn) {
-  ui.selectedTurn = turn;
-  [...els.turnButtons.children].forEach((btn) => {
-    btn.classList.toggle('selected', btn.dataset.turn === String(turn));
-  });
-  els.customAngleSection.classList.toggle('hidden', turn !== 'custom');
+function wallHeadings() {
+  const frame = rm.computeFrames(state.rooms).get(activeRoom().id);
+  return geo.computeHeadings(state.walls, frame.heading);
 }
 
-function setStartHeading(h) {
-  ui.startHeading = h;
-  [...els.startButtons.children].forEach((btn) => {
-    btn.classList.toggle('selected', Number(btn.dataset.start) === h);
+// Index of the wall being entered: the one being edited, or the next new one.
+function entryIndex() {
+  return ui.editingId ? state.walls.findIndex((w) => w.id === ui.editingId) : state.walls.length;
+}
+
+// Direction of the wall before the one being entered, or null for Wall 1.
+function previousHeading() {
+  const idx = entryIndex();
+  return idx > 0 ? wallHeadings()[idx - 1] : null;
+}
+
+function setSelectedHeading(h) {
+  ui.selectedHeading = h;
+  [...els.dirPad.children].forEach((btn) => {
+    btn.classList.toggle('selected', btn.dataset.heading === String(h));
   });
+  els.customAngleSection.classList.toggle('hidden', h !== 'custom');
+}
+
+// Grey out the arrow that would double straight back along the previous wall.
+function updateDirPad() {
+  const prev = previousHeading();
+  [...els.dirPad.children].forEach((btn) => {
+    const h = btn.dataset.heading;
+    btn.disabled = h !== 'custom' && prev != null &&
+      Math.abs(Math.abs(normalizeAngle180(Number(h) - prev)) - 180) < 0.01;
+  });
+  const chosen = els.dirPad.querySelector('.pad-btn.selected');
+  if (chosen && chosen.disabled) setSelectedHeading(null);
+  els.customAngleLabel.textContent = prev == null ? 'Turn from straight up the plan' : 'Turn from the previous wall';
 }
 
 function setCustomSide(side) {
@@ -222,13 +259,20 @@ function setCustomSide(side) {
   });
 }
 
-function currentTurnAngle() {
-  if (ui.selectedTurn === 'custom') {
+// The angle to store for the wall being entered, or null if no valid direction.
+function currentWallAngle() {
+  const prev = previousHeading();
+  if (ui.selectedHeading === 'custom') {
     const deg = parseFloat(els.customAngleInput.value);
     if (!Number.isFinite(deg) || deg <= 0) return null;
-    return ui.customSide === 'left' ? -deg : deg;
+    const turn = ui.customSide === 'left' ? -deg : deg;
+    return prev == null ? ((turn % 360) + 360) % 360 : turn;
   }
-  return Number(ui.selectedTurn);
+  if (ui.selectedHeading == null) return null;
+  const heading = Number(ui.selectedHeading);
+  if (prev == null) return heading;
+  const turn = normalizeAngle180(heading - prev);
+  return Math.abs(Math.abs(turn) - 180) < 0.01 ? null : turn;
 }
 
 // ---------- rendering ----------
@@ -237,16 +281,13 @@ function render() {
   els.jobName.value = state.jobName;
   els.unitSelect.value = state.unit;
 
-  const isFirstWall = state.walls.length === 0 && ui.editingId === null;
-  const editingFirst = ui.editingId !== null && state.walls.findIndex((w) => w.id === ui.editingId) === 0;
-
-  const firstWallEntry = isFirstWall || editingFirst;
-  els.startDirectionSection.classList.toggle('hidden', !firstWallEntry || startHeadingFixed());
-  els.directionSection.classList.toggle('hidden', firstWallEntry);
+  const idx = entryIndex();
+  const firstWallEntry = idx === 0;
+  els.directionSection.classList.toggle('hidden', firstWallEntry && startHeadingFixed());
+  els.directionLabel.textContent = `Direction of Wall ${idx + 1} on the plan`;
+  updateDirPad();
   const anchorText = anchorDescription(activeRoom());
-  els.anchorFormNote.textContent = anchorText
-    ? `Wall 1 runs along the shared wall. ${anchorText}`
-    : '';
+  els.anchorFormNote.textContent = anchorText;
   els.anchorFormNote.classList.toggle('hidden', !(firstWallEntry && anchorText));
 
   renderEntryTitle();
@@ -257,6 +298,7 @@ function render() {
   renderPlan(els.planSvg, state.rooms, state.unit, {
     activeRoomId: state.activeRoomId,
     selectedWallId: ui.panelWallId,
+    previewPoint: previewPoint(),
   });
   renderStats();
   renderWallList();
@@ -353,13 +395,11 @@ function renderWallList() {
 // ---------- actions ----------
 
 function resetEntryForm() {
-  ui.selectedTurn = 0;
-  ui.customSide = 'left';
   ui.editingId = null;
-  setSelectedTurn(0);
-  setStartHeading(0);
+  setSelectedHeading(null);
   setCustomSide('left');
   els.customAngleInput.value = '';
+  [...els.presetChips.children].forEach((c) => c.classList.remove('selected'));
   clearLengthInputs();
 }
 
@@ -382,13 +422,13 @@ function handleAddWall() {
   }
 
   const editIdx = ui.editingId ? state.walls.findIndex((w) => w.id === ui.editingId) : -1;
-  const isFirst = editIdx === 0 || (editIdx === -1 && state.walls.length === 0);
+  const isFirst = entryIndex() === 0;
 
   let angle;
-  if (isFirst) {
-    angle = ui.startHeading;
+  if (isFirst && startHeadingFixed()) {
+    angle = 0; // direction comes from where the room was placed
   } else {
-    angle = currentTurnAngle();
+    angle = currentWallAngle();
     if (angle == null) {
       flashInvalid();
       return;
@@ -396,7 +436,14 @@ function handleAddWall() {
   }
 
   if (editIdx >= 0) {
+    // keep the walls after this one pointing the same way on the plan
+    const before = wallHeadings();
     state.walls[editIdx] = { ...state.walls[editIdx], lengthM, angle };
+    const next = state.walls[editIdx + 1];
+    if (next) {
+      const delta = wallHeadings()[editIdx] - before[editIdx];
+      next.angle = normalizeAngle180(next.angle - delta);
+    }
   } else {
     state.walls.push({ id: uid(), lengthM, angle });
   }
@@ -440,7 +487,7 @@ function showConfirm(message) {
 function handleUndo() {
   if (state.walls.length === 0) return;
   const lastId = state.walls[state.walls.length - 1].id;
-  rm.pinAttachedRooms(state.rooms, (a) => a.wallId === lastId);
+  rm.pinAttachedRooms(state.rooms, (a) => a.wallId === lastId || !!(a.sides && lastId in a.sides));
   const removed = state.walls.pop();
   ui.editingId = null;
   if (ui.panelWallId === removed.id) closeWallPanel();
@@ -453,14 +500,15 @@ function handleEditWall(id) {
   if (idx < 0) return;
   const wall = state.walls[idx];
   ui.editingId = id;
-  if (idx === 0) {
-    setStartHeading(wall.angle);
-  } else if ([-90, 0, 90].includes(wall.angle)) {
-    setSelectedTurn(wall.angle);
+  const heading = ((wallHeadings()[idx] % 360) + 360) % 360;
+  const square = [0, 90, 180, 270, 360].find((h) => Math.abs(h - heading) < 0.01);
+  if (square !== undefined) {
+    setSelectedHeading(square % 360);
   } else {
-    setSelectedTurn('custom');
-    setCustomSide(wall.angle < 0 ? 'left' : 'right');
-    els.customAngleInput.value = Math.abs(wall.angle);
+    setSelectedHeading('custom');
+    const turn = idx === 0 ? normalizeAngle180(wall.angle) : wall.angle;
+    setCustomSide(turn < 0 ? 'left' : 'right');
+    els.customAngleInput.value = Math.abs(turn);
   }
   buildLengthInputs();
   setLength(state.unit, 'len', wall.lengthM);
@@ -473,7 +521,7 @@ async function handleDeleteWall(id) {
   if (idx < 0) return;
   const ok = await showConfirm(`Delete wall ${idx + 1}? Later walls will keep their relative turns.`);
   if (!ok) return;
-  rm.pinAttachedRooms(state.rooms, (a) => a.wallId === id);
+  rm.pinAttachedRooms(state.rooms, (a) => a.wallId === id || !!(a.sides && id in a.sides));
   state.walls.splice(idx, 1);
   if (ui.editingId === id) resetEntryForm();
   if (ui.panelWallId === id) closeWallPanel();
@@ -852,60 +900,158 @@ function setActiveRoom(id) {
   render();
 }
 
-function setRoomPlace(place) {
-  ui.roomPlace = place;
-  setToggle(els.roomPlaceToggle, 'place', place);
-  els.attachSection.classList.toggle('hidden', place !== 'attach');
-  els.separateHint.classList.toggle('hidden', place !== 'separate');
-}
+// ---------- placing a new room by tapping the plan ----------
 
 function setHostCorner(corner) {
   ui.hostCorner = corner;
   setToggle(els.hostCornerToggle, 'corner', corner);
 }
 
-function selectedHost() {
-  const [roomId, wallId] = (els.hostWallSelect.value || '|').split('|');
-  const room = state.rooms.find((r) => r.id === roomId);
-  const wallIdx = room ? room.walls.findIndex((w) => w.id === wallId) : -1;
-  return room && wallIdx >= 0 ? { room, wallIdx, wall: room.walls[wallIdx] } : null;
+function startPlacing() {
+  if (allWalls().length === 0) {
+    // nothing drawn to place against yet
+    createRoom({ type: 'fixed', x: 0, y: 0, heading: null });
+    return;
+  }
+  closeWallPanel();
+  ui.placingRoom = true;
+  els.placeBanner.classList.remove('hidden');
+  els.planWrap.classList.add('placing');
+  render();
+  els.placeBanner.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function updateHostCornerLabels() {
-  const host = selectedHost();
+function stopPlacing() {
+  ui.placingRoom = false;
+  ui.placement = null;
+  els.placeBanner.classList.add('hidden');
+  els.planWrap.classList.remove('placing');
+  els.roomPanel.classList.add('hidden');
+}
+
+function svgPoint(e) {
+  const ctm = els.planSvg.getScreenCTM();
+  return ctm ? new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse()) : null;
+}
+
+// Where a tap on the plan should start a new room: snapped to the nearest
+// wall (and to a corner when close to one), or a free point in open space.
+// The side of each nearby wall the tap is on decides whether the new room
+// backs onto that wall (tap outside the room: move off it by the wall
+// thickness) or carries on in line with it (tap inside: no move).
+function placementFromTap(pt) {
+  const pointsById = rm.computeRoomPoints(state.rooms);
+  const vb = els.planSvg.viewBox.baseVal;
+  const fontSize = Math.max(vb.width, vb.height) * 0.045; // as in render.js
+  let best = null;
+  state.rooms.forEach((room) => {
+    const pts = pointsById.get(room.id);
+    room.walls.forEach((wall, i) => {
+      const a = pts[i];
+      const b = pts[i + 1];
+      const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const ux = (b.x - a.x) / len;
+      const uy = (b.y - a.y) / len;
+      const t = Math.max(0, Math.min(len, (pt.x - a.x) * ux + (pt.y - a.y) * uy));
+      const d = Math.hypot(pt.x - (a.x + ux * t), pt.y - (a.y + uy * t));
+      if (d <= fontSize && (!best || d < best.d)) best = { room, wallIdx: i, t, d, len, pts };
+    });
+  });
+  if (!best) return { type: 'free', x: pt.x, y: pt.y };
+
+  const { room, wallIdx, len, pts } = best;
+  const a = pts[wallIdx];
+  const b = pts[wallIdx + 1];
+  let offsetM = Math.round(best.t * 100) / 100; // nearest 10 mm
+  if (Math.hypot(pt.x - a.x, pt.y - a.y) <= fontSize * 1.2) offsetM = 0;
+  else if (Math.hypot(pt.x - b.x, pt.y - b.y) <= fontSize * 1.2) offsetM = len;
+
+  const sign = rm.insideSign(pts);
+  const n = room.walls.length;
+  const nearby = new Set([wallIdx]);
+  if (wallIdx > 0 || isShapeClosed(room.walls)) nearby.add((wallIdx - 1 + n) % n);
+  if (wallIdx < n - 1 || isShapeClosed(room.walls)) nearby.add((wallIdx + 1) % n);
+  const sides = {};
+  nearby.forEach((idx) => {
+    const p = pts[idx];
+    const q = pts[idx + 1];
+    const L = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+    const side = (pt.x - p.x) * (-(q.y - p.y) / L) + (pt.y - p.y) * ((q.x - p.x) / L) >= 0 ? 1 : -1;
+    sides[room.walls[idx].id] = side === -sign ? side : 0;
+  });
+  return { type: 'wall', roomId: room.id, wallId: room.walls[wallIdx].id, offsetM, sides };
+}
+
+function handlePlacementTap(e) {
+  const pt = svgPoint(e);
+  if (!pt) return;
+  const placement = placementFromTap(pt);
+  if (placement.type === 'free') {
+    createRoom({ type: 'fixed', x: Math.round(pt.x * 100) / 100, y: Math.round(pt.y * 100) / 100, heading: null });
+    return;
+  }
+  ui.placement = placement;
+  openPlacementSheet();
+}
+
+function placementHost() {
+  const p = ui.placement;
+  const room = p && state.rooms.find((r) => r.id === p.roomId);
+  const wallIdx = room ? room.walls.findIndex((w) => w.id === p.wallId) : -1;
+  return wallIdx >= 0 ? { room, wallIdx, wall: room.walls[wallIdx] } : null;
+}
+
+function openPlacementSheet() {
+  const p = ui.placement;
+  const host = placementHost();
   if (!host) return;
   const corners = cornerLabels(host.wallIdx, host.room.walls);
   els.hostCornerToggle.querySelector('[data-corner="start"]').textContent = corners.start;
   els.hostCornerToggle.querySelector('[data-corner="end"]').textContent = corners.end;
-}
-
-// prefill: { roomId, wallId } to start from a particular wall
-function openRoomPanel(prefill = null) {
-  els.hostWallSelect.innerHTML = '';
-  state.rooms.forEach((room, ri) => {
-    room.walls.forEach((wall, wi) => {
-      const opt = document.createElement('option');
-      opt.value = `${room.id}|${wall.id}`;
-      opt.textContent = `${rm.roomLabel(room, ri)} · Wall ${wi + 1} – ${units.formatLength(wall.lengthM, state.unit)}`;
-      els.hostWallSelect.appendChild(opt);
-    });
-  });
-  const hasWalls = els.hostWallSelect.options.length > 0;
-  els.roomPlaceToggle.querySelector('[data-place="attach"]').disabled = !hasWalls;
-  if (prefill) els.hostWallSelect.value = `${prefill.roomId}|${prefill.wallId}`;
-  setRoomPlace(hasWalls ? 'attach' : 'separate');
-  setHostCorner('start');
-  updateHostCornerLabels();
+  const fromEnd = p.offsetM > host.wall.lengthM / 2;
+  setHostCorner(fromEnd ? 'end' : 'start');
   buildLengthInput($('#anchorOffsetInputs'), state.unit, 'anchorOff');
-  setLength(state.unit, 'anchorOff', 0);
+  setLength(state.unit, 'anchorOff', fromEnd ? host.wall.lengthM - p.offsetM : p.offsetM);
   buildLengthInput($('#thicknessInputs'), state.unit, 'thick');
   setLength(state.unit, 'thick', rm.DEFAULT_WALL_THICKNESS_M);
+  const backsOnto = Object.values(p.sides).some((v) => v);
+  els.placeSummary.textContent =
+    `${rm.roomLabel(host.room, roomIndex(host.room))} · Wall ${host.wallIdx + 1} ` +
+    `(${units.formatLength(host.wall.lengthM, state.unit)}), ` +
+    (backsOnto ? 'new room on the other side of the wall.' : 'new room starts on the inside face.');
   els.roomError.classList.add('hidden');
   els.roomPanel.classList.remove('hidden');
+  render();
+}
+
+// The anchor the start sheet describes right now (inputs as typed).
+function placementAnchor() {
+  const p = ui.placement;
+  const host = placementHost();
+  if (!host) return null;
+  let offsetM = p.offsetM;
+  let thicknessM = rm.DEFAULT_WALL_THICKNESS_M;
+  if (!els.roomPanel.classList.contains('hidden')) {
+    const dist = readLength(state.unit, 'anchorOff', { allowZero: true });
+    const thick = readLength(state.unit, 'thick', { allowZero: true });
+    if (dist != null) offsetM = ui.hostCorner === 'end' ? host.wall.lengthM - dist : dist;
+    if (thick != null) thicknessM = thick;
+  }
+  return { type: 'wall', roomId: p.roomId, wallId: p.wallId, offsetM, thicknessM, sides: p.sides };
+}
+
+function previewPoint() {
+  if (!ui.placement) return null;
+  const anchor = placementAnchor();
+  if (!anchor) return null;
+  const frame = rm.computeFrames([...state.rooms, { id: '__preview', walls: [], anchor }]).get('__preview');
+  return { x: frame.x, y: frame.y };
 }
 
 function closeRoomPanel() {
   els.roomPanel.classList.add('hidden');
+  ui.placement = null;
+  render();
 }
 
 function showRoomError(message) {
@@ -914,24 +1060,22 @@ function showRoomError(message) {
 }
 
 function handleCreateRoom() {
-  let anchor;
-  if (ui.roomPlace === 'attach') {
-    const host = selectedHost();
-    if (!host) return showRoomError('Pick the shared wall.');
-    const offsetM = readLength(state.unit, 'anchorOff', { allowZero: true });
-    const thicknessM = readLength(state.unit, 'thick', { allowZero: true });
-    if (offsetM == null) return showRoomError('Enter the distance from the corner (0 if the rooms line up).');
-    if (thicknessM == null) return showRoomError('Enter the wall thickness.');
-    if (offsetM > host.wall.lengthM) {
-      return showRoomError(`That's past the end of the wall (${units.formatLength(host.wall.lengthM, state.unit)}).`);
-    }
-    anchor = { type: 'wall', roomId: host.room.id, wallId: host.wall.id, fromCorner: ui.hostCorner, offsetM, thicknessM };
-  } else {
-    anchor = rm.separateRoomAnchor(state.rooms);
+  const host = placementHost();
+  if (!host) return;
+  const dist = readLength(state.unit, 'anchorOff', { allowZero: true });
+  const thick = readLength(state.unit, 'thick', { allowZero: true });
+  if (dist == null) return showRoomError('Enter the distance from the corner (0 to start at the corner).');
+  if (thick == null) return showRoomError('Enter the wall thickness.');
+  if (dist > host.wall.lengthM + 0.001) {
+    return showRoomError(`That's past the end of the wall (${units.formatLength(host.wall.lengthM, state.unit)}).`);
   }
+  createRoom(placementAnchor());
+}
+
+function createRoom(anchor) {
+  stopPlacing();
   const room = rm.newRoom(anchor);
   state.rooms.push(room);
-  closeRoomPanel();
   setActiveRoom(room.id);
   els.entryTitle.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -962,17 +1106,10 @@ els.unitSelect.addEventListener('change', () => {
   render();
 });
 
-els.turnButtons.addEventListener('click', (e) => {
-  const btn = e.target.closest('.dir-btn');
-  if (!btn) return;
-  const val = btn.dataset.turn === 'custom' ? 'custom' : Number(btn.dataset.turn);
-  setSelectedTurn(val);
-});
-
-els.startButtons.addEventListener('click', (e) => {
-  const btn = e.target.closest('.dir-btn');
-  if (!btn) return;
-  setStartHeading(Number(btn.dataset.start));
+els.dirPad.addEventListener('click', (e) => {
+  const btn = e.target.closest('.pad-btn');
+  if (!btn || btn.disabled) return;
+  setSelectedHeading(btn.dataset.heading === 'custom' ? 'custom' : Number(btn.dataset.heading));
 });
 
 els.lrToggle.addEventListener('click', (e) => {
@@ -1047,6 +1184,10 @@ function nearestHitLine(e) {
 }
 
 els.planSvg.addEventListener('click', (e) => {
+  if (ui.placingRoom) {
+    handlePlacementTap(e);
+    return;
+  }
   const hit = nearestHitLine(e);
   if (!hit) return;
   if (hit.dataset.roomId !== state.activeRoomId) setActiveRoom(hit.dataset.roomId);
@@ -1111,7 +1252,7 @@ els.openingList.addEventListener('click', (e) => {
 els.roomTabs.addEventListener('click', (e) => {
   const btn = e.target.closest('.room-tab');
   if (!btn) return;
-  if (btn.dataset.addRoom) openRoomPanel();
+  if (btn.dataset.addRoom) startPlacing();
   else setActiveRoom(btn.dataset.roomId);
 });
 // Only light updates here: re-rendering the wall list while the name box
@@ -1127,26 +1268,26 @@ els.roomName.addEventListener('input', () => {
 });
 els.roomName.addEventListener('change', persist);
 els.deleteRoomBtn.addEventListener('click', handleDeleteRoom);
-els.addRoomFromWallBtn.addEventListener('click', () => {
-  const wallId = ui.panelWallId;
-  const roomId = state.activeRoomId;
-  closeWallPanel();
+els.cancelPlaceBtn.addEventListener('click', () => {
+  stopPlacing();
   render();
-  openRoomPanel({ roomId, wallId });
 });
 els.closeRoomPanelBtn.addEventListener('click', closeRoomPanel);
 els.cancelRoomBtn.addEventListener('click', closeRoomPanel);
 els.roomPanel.addEventListener('click', (e) => {
   if (e.target === els.roomPanel) closeRoomPanel();
 });
-els.roomPlaceToggle.addEventListener('click', (e) => {
-  const btn = e.target.closest('.lr-btn');
-  if (btn && !btn.disabled) setRoomPlace(btn.dataset.place);
-});
-els.hostWallSelect.addEventListener('change', updateHostCornerLabels);
 els.hostCornerToggle.addEventListener('click', (e) => {
   const btn = e.target.closest('.lr-btn');
-  if (btn) setHostCorner(btn.dataset.corner);
+  if (!btn || btn.dataset.corner === ui.hostCorner) return;
+  // keep the same point: re-express the distance from the other corner
+  const host = placementHost();
+  const dist = readLength(state.unit, 'anchorOff', { allowZero: true });
+  setHostCorner(btn.dataset.corner);
+  if (host && dist != null) setLength(state.unit, 'anchorOff', Math.max(host.wall.lengthM - dist, 0));
+});
+['#anchorOffsetInputs', '#thicknessInputs'].forEach((sel) => {
+  $(sel).addEventListener('input', () => render());
 });
 els.createRoomBtn.addEventListener('click', handleCreateRoom);
 
@@ -1154,8 +1295,7 @@ els.createRoomBtn.addEventListener('click', handleCreateRoom);
 
 function init() {
   buildLengthInputs();
-  setSelectedTurn(0);
-  setStartHeading(0);
+  setSelectedHeading(null);
   setCustomSide('left');
 
   const jobs = store.listJobs();

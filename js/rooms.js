@@ -4,12 +4,21 @@
 //   null                                   first room, at the origin
 //   { type: 'fixed', x, y, heading }       a fixed start point (heading null =
 //                                          use the first wall's own direction)
-//   { type: 'wall', roomId, wallId, fromCorner, offsetM, thicknessM }
-//                                          on the far side of another room's
-//                                          wall; Wall 1 runs along that wall,
-//                                          away from the chosen corner
+//   { type: 'wall', roomId, wallId, offsetM, thicknessM, sides }
+//                                          a point on another room's wall,
+//                                          offsetM from the wall's start,
+//                                          moved off it by the wall thickness.
+//                                          sides maps wall id -> +1/-1 (which
+//                                          way to move off that wall line) or
+//                                          0 (no move); it covers the tapped
+//                                          wall and the walls either side, the
+//                                          neighbours only counting when the
+//                                          point is at their shared corner.
+//                                          Wall 1's direction is the room's own.
+//   Older rooms stored { fromCorner, offsetM, thicknessM } without sides;
+//   for those Wall 1 runs along the host wall, away from that corner.
 
-import { computePoints, boundingBox } from './geometry.js';
+import { computePoints } from './geometry.js';
 
 export const DEFAULT_WALL_THICKNESS_M = 0.11;
 
@@ -37,7 +46,40 @@ export function insideSign(points) {
   return sum >= 0 ? 1 : -1;
 }
 
-// Start point and heading for a room attached to a wall of a host room.
+function wallNormal(points, idx) {
+  const a = points[idx];
+  const b = points[idx + 1];
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  return { x: -(b.y - a.y) / len, y: (b.x - a.x) / len };
+}
+
+// Start point for a room placed by tapping a host wall (see `sides` above).
+function sidedFrame(host, hostPoints, wallIndex, anchor) {
+  const a = hostPoints[wallIndex];
+  const b = hostPoints[wallIndex + 1];
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const offset = Math.min(Math.max(anchor.offsetM, 0), len);
+  let x = a.x + ((b.x - a.x) / len) * offset;
+  let y = a.y + ((b.y - a.y) / len) * offset;
+  const atStart = offset < 0.001;
+  const atEnd = len - offset < 0.001;
+  const n = host.walls.length;
+  Object.entries(anchor.sides || {}).forEach(([wallId, side]) => {
+    if (!side) return;
+    const idx = host.walls.findIndex((w) => w.id === wallId);
+    if (idx < 0) return;
+    const isPrev = idx === (wallIndex - 1 + n) % n && idx !== wallIndex;
+    const isNext = idx === (wallIndex + 1) % n && idx !== wallIndex;
+    if (idx !== wallIndex && !((isPrev && atStart) || (isNext && atEnd))) return;
+    const nrm = wallNormal(hostPoints, idx);
+    x += nrm.x * side * anchor.thicknessM;
+    y += nrm.y * side * anchor.thicknessM;
+  });
+  return { x, y, heading: null };
+}
+
+// Start point and heading for a room attached along a wall of a host room
+// (rooms created before tap-to-place).
 function attachedFrame(hostPoints, wallIndex, anchor) {
   const a = hostPoints[wallIndex];
   const b = hostPoints[wallIndex + 1];
@@ -75,7 +117,9 @@ export function computeFrames(rooms) {
       const host = rooms.find((r) => r.id === anchor.roomId);
       const hostPoints = host && pointsById.get(host.id);
       const idx = host ? host.walls.findIndex((w) => w.id === anchor.wallId) : -1;
-      if (hostPoints && idx >= 0) frame = attachedFrame(hostPoints, idx, anchor);
+      if (hostPoints && idx >= 0) {
+        frame = anchor.sides ? sidedFrame(host, hostPoints, idx, anchor) : attachedFrame(hostPoints, idx, anchor);
+      }
     }
     frames.set(room.id, frame);
     pointsById.set(room.id, computePoints(room.walls, frame));
@@ -95,12 +139,8 @@ export function pinAttachedRooms(rooms, isAffected) {
   });
 }
 
-// Where to put a new room that isn't attached to anything: to the right of
-// everything drawn so far.
-export function separateRoomAnchor(rooms) {
+// Every room's corner points on the job plan, keyed by room id.
+export function computeRoomPoints(rooms) {
   const frames = computeFrames(rooms);
-  const all = rooms.flatMap((r) => (r.walls.length ? computePoints(r.walls, frames.get(r.id)) : []));
-  if (all.length === 0) return { type: 'fixed', x: 0, y: 0, heading: null };
-  const box = boundingBox(all);
-  return { type: 'fixed', x: box.maxX + 1.5, y: box.maxY, heading: null };
+  return new Map(rooms.map((r) => [r.id, computePoints(r.walls, frames.get(r.id))]));
 }

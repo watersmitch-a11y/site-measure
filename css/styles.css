@@ -521,3 +521,57 @@ main {
 .plan-room.dim { opacity: 0.4; }
 .plan-room-name { fill: var(--text-dim); font-weight: 600; pointer-events: none; }
 .plan-room.active .plan-room-name { fill: var(--text); opacity: 0.55; }
+
+/* ---------- direction arrow pad + room placement ---------- */
+
+.dir-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 64px);
+  grid-template-rows: repeat(3, 56px);
+  grid-template-areas:
+    ". up ."
+    "left mid right"
+    ". down .";
+  gap: 0.35rem;
+  justify-content: center;
+}
+.pad-btn {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.pad-btn svg { width: 34px; height: 34px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+.pad-up { grid-area: up; }
+.pad-left { grid-area: left; }
+.pad-left svg { transform: rotate(-90deg); }
+.pad-right { grid-area: right; }
+.pad-right svg { transform: rotate(90deg); }
+.pad-down { grid-area: down; }
+.pad-down svg { transform: rotate(180deg); }
+.pad-mid { grid-area: mid; font-size: 0.8rem; color: var(--text-dim); }
+.pad-btn.selected { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+.pad-btn.selected svg { fill: var(--accent-dim); }
+.pad-btn:disabled { opacity: 0.25; }
+.direction-section.hidden { display: none; }
+
+.place-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.85rem;
+}
+.place-banner span { flex: 1; }
+.place-banner.hidden { display: none; }
+.plan-wrap.placing { border-color: var(--accent); }
+.plan-preview { fill: var(--green); stroke: var(--bg); }
+#roomPanel .field-label { margin-top: 0.75rem; }

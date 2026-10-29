@@ -21,7 +21,7 @@ function readableAngle(angle) {
 
 // Renders every room of the job. The active room gets full detail (lengths,
 // arrows, start/end markers); other rooms are drawn dimmed with their name.
-export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWallId = null } = {}) {
+export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWallId = null, previewPoint = null } = {}) {
   svg.innerHTML = '';
 
   const frames = computeFrames(rooms);
@@ -68,6 +68,17 @@ export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWall
     });
   if (activeRoom) {
     drawRoom(svg, activeRoom, rooms.indexOf(activeRoom), roomPoints.get(activeRoom.id), true, ctx);
+  }
+
+  // where a new room will start, while it's being placed
+  if (previewPoint) {
+    svg.appendChild(el('circle', {
+      cx: previewPoint.x,
+      cy: previewPoint.y,
+      r: fontSize * 0.45,
+      class: 'plan-preview',
+      'stroke-width': strokeWidth * 0.5,
+    }));
   }
 
   svg.appendChild(hitGroup);
