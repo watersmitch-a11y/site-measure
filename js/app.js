@@ -1116,6 +1116,9 @@ function createRoom(anchor, walls = []) {
   stopPlacing();
   const room = rm.newRoom(anchor);
   room.walls = walls;
+  // ceiling heights rarely change through a job: start from the last one set
+  const lastCeiling = [...state.rooms].reverse().find((r) => r.ceilingHeightM);
+  room.ceilingHeightM = lastCeiling ? lastCeiling.ceilingHeightM : null;
   state.rooms.push(room);
   setActiveRoom(room.id);
   els.entryTitle.scrollIntoView({ behavior: 'smooth', block: 'start' });
