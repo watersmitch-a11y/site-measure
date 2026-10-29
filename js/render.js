@@ -74,14 +74,20 @@ export function renderPlan(svg, walls, unit) {
     const len = Math.hypot(dx, dy) || 1;
     const nx = -dy / len;
     const ny = dx / len;
-    const offset = fontSize * 1.1;
+    const offset = fontSize * 0.9;
     const lx = mx + nx * offset;
     const ly = my + ny * offset;
+    // rotate the label to run along the wall, flipped so it never reads upside down
+    let textAngle = angle;
+    if (textAngle > 90) textAngle -= 180;
+    if (textAngle <= -90) textAngle += 180;
     const label = el('text', {
       x: lx,
       y: ly,
       'text-anchor': 'middle',
+      'dominant-baseline': 'central',
       'font-size': fontSize,
+      transform: `rotate(${textAngle}, ${lx}, ${ly})`,
       class: 'plan-label',
     });
     label.textContent = `${i + 1}. ${formatLength(w.lengthM, unit)}`;
