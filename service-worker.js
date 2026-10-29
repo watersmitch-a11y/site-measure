@@ -1,4 +1,4 @@
-const CACHE_NAME = 'site-measure-v3';
+const CACHE_NAME = 'site-measure-v4';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -13,7 +13,12 @@ const CORE_ASSETS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE_ASSETS))
+    // cache: 'reload' skips the browser's HTTP cache so we never store stale files
+    caches.open(CACHE_NAME).then((cache) =>
+      Promise.all(CORE_ASSETS.map((url) =>
+        fetch(new Request(url, { cache: 'reload' })).then((res) => cache.put(url, res))
+      ))
+    )
   );
   self.skipWaiting();
 });
@@ -27,20 +32,17 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Cache-first for app shell, falling back to network. This app is fully
-// local-data (localStorage) so offline use is safe once the shell is cached.
+// Network-first so updates show up straight away; falls back to the cache when
+// offline (job data lives in localStorage, so the app still works on site).
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-          return response;
-        })
-        .catch(() => cached);
-    })
+    fetch(event.request, { cache: 'no-cache' })
+      .then((response) => {
+        const copy = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        return response;
+      })
+      .catch(() => caches.match(event.request))
   );
 });
