@@ -736,6 +736,33 @@ function cornerLabels(idx, room = activeRoom()) {
   return { start, end };
 }
 
+// The ends of a wall as they look on the plan: { start: 'left', end: 'right',
+// first: 'start' }, where first is the left/top end. Angled walls go by the
+// way they mostly run. Easier to match to the plan than "corner with Wall 3"
+// when the panel covers it.
+const END_ARROWS = { left: '←', right: '→', top: '↑', bottom: '↓' };
+const OPPOSITE_END = { left: 'right', right: 'left', top: 'bottom', bottom: 'top' };
+
+function planEnds(idx, room = activeRoom()) {
+  const pts = geometryOf(room).points;
+  const dx = pts[idx + 1].x - pts[idx].x;
+  const dy = pts[idx + 1].y - pts[idx].y; // y runs down the plan
+  const start = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? 'left' : 'right') : (dy >= 0 ? 'top' : 'bottom');
+  return { start, end: OPPOSITE_END[start], first: start === 'left' || start === 'top' ? 'start' : 'end' };
+}
+
+// Which side of the room a wall is on as seen on the plan (top, left, …), so
+// it can be told apart while the panel covers the plan.
+function roomSide(idx, room = activeRoom()) {
+  const pts = geometryOf(room).points;
+  const dx = pts[idx + 1].x - pts[idx].x;
+  const dy = pts[idx + 1].y - pts[idx].y;
+  const out = -rm.insideSign(pts); // outward normal is (-dy, dx) * out
+  const ox = -dy * out;
+  const oy = dx * out;
+  return Math.abs(ox) >= Math.abs(oy) ? (ox > 0 ? 'right' : 'left') : (oy > 0 ? 'bottom' : 'top');
+}
+
 function formatSize(widthM, heightM) {
   if (state.unit === 'mm') {
     return `${Math.round(units.metersToMm(widthM))} × ${Math.round(units.metersToMm(heightM))} mm`;
@@ -749,12 +776,18 @@ function openWallPanel(id) {
   const wall = state.walls[idx];
   ui.panelWallId = id;
   const roomPrefix = state.rooms.length > 1 ? `${activeLabel()} – ` : '';
-  els.wallPanelTitle.textContent = `${roomPrefix}Wall ${idx + 1} – ${units.formatLength(wall.lengthM, state.unit)}`;
+  els.wallPanelTitle.textContent =
+    `${roomPrefix}Wall ${idx + 1} – ${units.formatLength(wall.lengthM, state.unit)} · ${roomSide(idx)} wall`;
   buildLengthInput(els.wallCeilingInputs, state.unit, 'wallCeil', 'Same as room');
   setLength(state.unit, 'wallCeil', wall.ceilingHeightM || null);
-  const corners = cornerLabels(idx);
-  els.cornerToggle.querySelector('[data-corner="start"]').textContent = corners.start;
-  els.cornerToggle.querySelector('[data-corner="end"]').textContent = corners.end;
+  // left/top end on the left-hand button, so the toggle reads like the plan
+  const ends = planEnds(idx);
+  const order = ends.first === 'start' ? ['start', 'end'] : ['end', 'start'];
+  [...els.cornerToggle.children].forEach((btn, i) => {
+    const corner = order[i];
+    btn.dataset.corner = corner;
+    btn.textContent = `${END_ARROWS[ends[corner]]} From ${ends[corner]} end`;
+  });
   hideOpeningForm();
   renderOpeningList();
   els.wallPanel.classList.remove('hidden');
@@ -780,12 +813,11 @@ function renderOpeningList() {
     return;
   }
   const tags = op.openingTags(allWalls());
-  const corners = cornerLabels(state.walls.indexOf(wall));
+  const ends = planEnds(state.walls.indexOf(wall));
   openings.forEach((o) => {
     const li = document.createElement('li');
     li.className = 'wall-row';
-    const corner = o.fromCorner === 'end' ? corners.end : corners.start;
-    const from = corner.charAt(0).toLowerCase() + corner.slice(1);
+    const from = `${ends[o.fromCorner === 'end' ? 'end' : 'start']} end`;
     const sill = o.type === 'window' || o.sillM ? ` · sill ${units.formatLength(o.sillM || 0, state.unit)}` : '';
     const door = o.type === 'door'
       ? ` · hinge ${o.hinge === 'right' ? 'right' : 'left'}, opens ${o.swing === 'out' ? 'out' : 'in'}`
@@ -843,7 +875,7 @@ function showOpeningForm(opening) {
   buildLengthInput($('#heightInputs'), state.unit, 'opH');
   buildLengthInput($('#sillInputs'), state.unit, 'opSill');
   setOpeningType(opening ? opening.type : 'door');
-  setOpeningCorner(opening ? opening.fromCorner : 'start');
+  setOpeningCorner(opening ? opening.fromCorner : planEnds(state.walls.indexOf(panelWall())).first);
   setOpeningHinge(opening && opening.hinge ? opening.hinge : 'left');
   setOpeningSwing(opening && opening.swing ? opening.swing : 'in');
   let lastMeasuredTo = 'plaster';
@@ -1074,9 +1106,8 @@ function fillSharedSpan() {
 function openPlacementSheet() {
   const host = placementHost();
   if (!host) return;
-  const corners = cornerLabels(host.wallIdx, host.room);
-  const startCorner = corners.start.charAt(0).toLowerCase() + corners.start.slice(1);
-  els.sharedStartLabel.textContent = `Shared part starts this far from ${startCorner}`;
+  const ends = planEnds(host.wallIdx, host.room);
+  els.sharedStartLabel.textContent = `${END_ARROWS[ends.start]} Shared part starts this far from the ${ends.start} end`;
   buildLengthInput($('#thicknessInputs'), state.unit, 'thick');
   setLength(state.unit, 'thick', rm.DEFAULT_WALL_THICKNESS_M);
   buildLengthInput($('#anchorOffsetInputs'), state.unit, 'anchorOff');
@@ -1227,7 +1258,7 @@ els.saveJobBtn.addEventListener('click', handleSaveJob);
 els.exportBtn.addEventListener('click', () => {
   if (allWalls().length === 0) return;
   persist();
-  exportPlan({ name: state.jobName, unit: state.unit, rooms: state.rooms }, { cornerLabels });
+  exportPlan({ name: state.jobName, unit: state.unit, rooms: state.rooms }, { planEnds });
 });
 
 els.wallList.addEventListener('click', (e) => {

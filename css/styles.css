@@ -524,16 +524,13 @@ main {
 
 /* ---------- direction arrow pad + room placement ---------- */
 
+/* one compact row: ← ↑ ↓ →  Angle */
 .dir-pad {
   display: grid;
-  grid-template-columns: repeat(3, 64px);
-  grid-template-rows: repeat(3, 56px);
-  grid-template-areas:
-    ". up ."
-    "left mid right"
-    ". down .";
+  grid-template-columns: repeat(4, 1fr) 1.2fr;
+  grid-template-rows: 48px;
+  grid-template-areas: "left up down right mid";
   gap: 0.35rem;
-  justify-content: center;
 }
 .pad-btn {
   background: var(--surface-2);
@@ -545,7 +542,7 @@ main {
   justify-content: center;
   padding: 0;
 }
-.pad-btn svg { width: 34px; height: 34px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+.pad-btn svg { width: 28px; height: 28px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
 .pad-up { grid-area: up; }
 .pad-left { grid-area: left; }
 .pad-left svg { transform: rotate(-90deg); }

@@ -20,8 +20,8 @@ function directionName(heading) {
   return square !== undefined ? names[square % 360] : `${a.toFixed(0)}° from up`;
 }
 
-// cornerLabels(idx, room) -> { start, end } as used in the app's panels
-export function exportPlan(job, { cornerLabels }) {
+// planEnds(idx, room) -> { start: 'left', end: 'right' } as used in the app's panels
+export function exportPlan(job, { planEnds }) {
   const { unit, rooms } = job;
   const fmt = (m) => units.formatLength(m, unit);
   const area = (m2) => units.formatArea(m2, unit);
@@ -57,14 +57,14 @@ export function exportPlan(job, { cornerLabels }) {
     }).join('');
 
     const openingRows = room.walls.flatMap((w, i) => (w.openings || []).map((o) => {
-      const corners = cornerLabels(i, room);
-      const corner = o.fromCorner === 'end' ? corners.end : corners.start;
+      const ends = planEnds(i, room);
+      const from = `${ends[o.fromCorner === 'end' ? 'end' : 'start']} end`;
       const details = [];
       if (o.type === 'window' || o.sillM) details.push(`Sill ${fmt(o.sillM || 0)}`);
       if (o.type === 'door') details.push(`Hinge ${o.hinge === 'right' ? 'right' : 'left'}, opens ${o.swing === 'out' ? 'out' : 'in'}`);
       if (o.note) details.push(o.note);
       return `<tr><td>${tags[o.id]}</td><td>${op.OPENING_TYPES[o.type].label}</td>` +
-        `<td>${fmt(o.widthM)} × ${fmt(o.heightM)}</td><td>Wall ${i + 1}, ${fmt(o.offsetM)} from ${esc(corner.toLowerCase())}</td>` +
+        `<td>${fmt(o.widthM)} × ${fmt(o.heightM)}</td><td>Wall ${i + 1}, ${fmt(o.offsetM)} from ${from}</td>` +
         `<td>${op.MEASURED_TO[o.measuredTo] || ''}</td><td>${esc(details.join(' · '))}</td></tr>`;
     })).join('');
 
