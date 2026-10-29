@@ -43,6 +43,10 @@ function roomIndex(room) {
   return state.rooms.indexOf(room);
 }
 
+function geometryOf(room) {
+  return rm.roomGeometry(state.rooms).get(room.id);
+}
+
 function activeLabel() {
   return rm.roomLabel(activeRoom(), roomIndex(activeRoom()));
 }
@@ -150,7 +154,7 @@ function headingName(angle) {
 function startHeadingFixed() {
   const anchor = activeRoom().anchor;
   if (!anchor) return false;
-  if (anchor.type === 'wall') return !anchor.sides;
+  if (anchor.type === 'wall') return !anchor.sides && !anchor.shared;
   return anchor.type === 'fixed' && anchor.heading != null;
 }
 
@@ -162,10 +166,14 @@ function anchorDescription(room) {
   const wallIdx = host.walls.findIndex((w) => w.id === anchor.wallId);
   if (wallIdx < 0) return '';
   const wall = host.walls[wallIdx];
-  const corners = cornerLabels(wallIdx, host.walls);
+  const corners = cornerLabels(wallIdx, host);
   const lower = (t) => t.charAt(0).toLowerCase() + t.slice(1);
   const fmt = (m) => units.formatLength(m, state.unit);
   const hostName = `${rm.roomLabel(host, roomIndex(host))} · Wall ${wallIdx + 1}`;
+  if (anchor.shared) {
+    return `Shares ${hostName} (${fmt(anchor.lengthM)}, ${fmt(anchor.thicknessM)} wall). ` +
+      'Walk the other walls; Complete Perimeter closes onto the shared wall.';
+  }
   if (!anchor.sides) {
     const corner = anchor.fromCorner === 'end' ? corners.end : corners.start;
     return `Wall 1 is the other side of ${hostName}, starting ${fmt(anchor.offsetM)} from ${lower(corner)}, ` +
@@ -265,14 +273,23 @@ function renderMatchChips() {
     .filter(({ i }) => i !== current && Math.abs(normalizeAngle180(headings[i] - heading - 180)) < 0.5)
     .slice(-2)
     .reverse()
-    .forEach(({ w, i }) => {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'chip match';
-      btn.dataset.lengthM = w.lengthM;
-      btn.textContent = `= Wall ${i + 1} · ${units.formatLength(w.lengthM, state.unit)}`;
-      els.matchChips.appendChild(btn);
-    });
+    .forEach(({ w, i }) => addMatchChip(`Wall ${i + 1}`, w.lengthM));
+  // the shared wall is the closing edge, running from the closing point back to the start
+  const span = rm.sharedSpan(state.rooms, activeRoom());
+  if (span) {
+    const g = geometryOf(activeRoom());
+    const edge = (Math.atan2(g.frame.x - g.target.x, -(g.frame.y - g.target.y)) * 180) / Math.PI;
+    if (Math.abs(normalizeAngle180(edge - heading - 180)) < 0.5) addMatchChip('shared wall', span.lengthM);
+  }
+}
+
+function addMatchChip(label, lengthM) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'chip match';
+  btn.dataset.lengthM = lengthM;
+  btn.textContent = `= ${label} · ${units.formatLength(lengthM, state.unit)}`;
+  els.matchChips.appendChild(btn);
 }
 
 // Grey out the arrow that would double straight back along the previous wall.
@@ -339,7 +356,7 @@ function render() {
   });
   renderStats();
   renderWallList();
-  els.closePolygonBtn.classList.toggle('hidden', state.walls.length < 2);
+  els.closePolygonBtn.classList.toggle('hidden', state.walls.length < rm.minWallsToClose(activeRoom()));
 }
 
 function renderEntryTitle() {
@@ -354,16 +371,16 @@ function renderEntryTitle() {
 
 function renderStats() {
   els.statsBar.innerHTML = '';
-  const perim = geo.perimeter(state.walls);
+  const room = activeRoom();
+  const g = geometryOf(room);
+  const perim = rm.roomPerimeter(state.rooms, room);
   addPill(`Perimeter: <strong>${units.formatLength(perim, state.unit)}</strong>`);
 
-  if (state.walls.length >= 3) {
-    const a = geo.area(state.walls);
-    addPill(`Area: <strong>${units.formatArea(a, state.unit)}</strong>`);
-  }
+  const a = rm.roomArea(room, g);
+  if (a != null) addPill(`Area: <strong>${units.formatArea(a, state.unit)}</strong>`);
 
-  if (state.walls.length >= 2) {
-    const gap = geo.closingGap(state.walls);
+  if (state.walls.length >= rm.minWallsToClose(room)) {
+    const gap = rm.closingGap(room, g);
     if (gap > 0.05) {
       addPill(`Gap to close: <strong>${units.formatLength(gap, state.unit)}</strong>`, true);
     } else {
@@ -372,14 +389,16 @@ function renderStats() {
   }
 
   const areas = op.wallAreas(state.walls, state.ceilingHeightM);
-  if (areas.wallsCounted > 0) {
+  const sharedArea = rm.sharedWallArea(state.rooms, room, state.ceilingHeightM);
+  if (areas.wallsCounted > 0 || sharedArea > 0) {
     const partial = areas.wallsCounted < state.walls.length ? ' (some walls)' : '';
-    addPill(`Wall area net: <strong>${units.formatArea(areas.net, state.unit)}</strong>${partial}`);
+    addPill(`Wall area net: <strong>${units.formatArea(areas.net + sharedArea, state.unit)}</strong>${partial}`);
   }
 
-  const measuredRooms = state.rooms.filter((r) => r.walls.length >= 3);
+  const geom = rm.roomGeometry(state.rooms);
+  const measuredRooms = state.rooms.filter((r) => rm.roomArea(r, geom.get(r.id)) != null);
   if (state.rooms.length > 1 && measuredRooms.length > 0) {
-    const total = measuredRooms.reduce((sum, r) => sum + geo.area(r.walls), 0);
+    const total = measuredRooms.reduce((sum, r) => sum + rm.roomArea(r, geom.get(r.id)), 0);
     addPill(`Job total: <strong>${units.formatArea(total, state.unit)}</strong> (${measuredRooms.length} rooms)`);
   }
 }
@@ -485,9 +504,24 @@ function handleAddWall() {
     state.walls.push({ id: uid(), lengthM, angle });
   }
 
+  settleSharedStart(activeRoom());
   resetEntryForm();
   persist();
   render();
+}
+
+// A shared-wall room can be walked from either end of the shared wall. Once
+// the walls show which way it goes, start it from whichever end its walls
+// lead back towards (so Complete Perimeter closes along the shared wall
+// rather than across the room).
+function settleSharedStart(room) {
+  const anchor = room.anchor;
+  if (!anchor || !anchor.shared || room.walls.length < 2) return;
+  const gapNow = rm.closingGap(room, geometryOf(room));
+  if (gapNow <= 0.05) return;
+  anchor.reversed = !anchor.reversed;
+  const gapFlipped = rm.closingGap(room, geometryOf(room));
+  if (gapFlipped >= gapNow - 0.01) anchor.reversed = !anchor.reversed;
 }
 
 function flashInvalid() {
@@ -566,13 +600,18 @@ async function handleDeleteWall(id) {
   render();
 }
 
+// Adds the wall from the open end back to where the room closes: its start,
+// or the near end of a shared wall.
 function handleClosePolygon() {
-  const closing = geo.closingWall(state.walls);
-  if (!closing || closing.lengthM < 0.01) return;
-  const headings = geo.computeHeadings(state.walls);
-  const lastHeading = headings[headings.length - 1];
-  const angle = normalizeAngle180(closing.heading - lastHeading);
-  state.walls.push({ id: uid(), lengthM: closing.lengthM, angle });
+  const g = geometryOf(activeRoom());
+  const last = g.points[g.points.length - 1];
+  const dx = g.target.x - last.x;
+  const dy = g.target.y - last.y;
+  const lengthM = Math.hypot(dx, dy);
+  if (state.walls.length === 0 || lengthM < 0.01) return;
+  const heading = (Math.atan2(dx, -dy) * 180) / Math.PI;
+  const angle = normalizeAngle180(heading - wallHeadings()[state.walls.length - 1]);
+  state.walls.push({ id: uid(), lengthM, angle });
   persist();
   render();
 }
@@ -606,6 +645,7 @@ function applyJob(job) {
     room.walls = job.walls || [];
     state.rooms = [room];
   }
+  rm.migrateSharedWallRooms(state.rooms);
   state.activeRoomId = state.rooms.some((r) => r.id === job.activeRoomId)
     ? job.activeRoomId
     : state.rooms[0].id;
@@ -675,20 +715,25 @@ function panelWall() {
   return state.walls.find((w) => w.id === ui.panelWallId) || null;
 }
 
-function isShapeClosed(walls = state.walls) {
-  return walls.length >= 3 && geo.closingGap(walls) <= 0.05;
+function isShapeClosed(room = activeRoom()) {
+  return rm.roomClosed(room, geometryOf(room));
 }
 
 // What each end of a wall meets, e.g. "Wall 4", for the measure-from toggles.
-function cornerLabels(idx, walls = state.walls) {
+function cornerLabels(idx, room = activeRoom()) {
+  const walls = room.walls;
+  const shared = !!(room.anchor && room.anchor.shared);
   const n = walls.length;
-  const closed = isShapeClosed(walls);
-  const startWall = idx > 0 ? idx : closed ? n : null;
-  const endWall = idx < n - 1 ? idx + 2 : closed ? 1 : null;
-  return {
-    start: startWall ? `Corner with Wall ${startWall}` : 'Start point',
-    end: endWall ? `Corner with Wall ${endWall}` : 'Open end',
-  };
+  const closed = isShapeClosed(room);
+  // a shared-wall room starts and (once closed) ends against the shared wall
+  let start = 'Start point';
+  if (idx > 0) start = `Corner with Wall ${idx}`;
+  else if (shared) start = 'Corner with shared wall';
+  else if (closed) start = `Corner with Wall ${n}`;
+  let end = 'Open end';
+  if (idx < n - 1) end = `Corner with Wall ${idx + 2}`;
+  else if (closed) end = shared ? 'Corner with shared wall' : 'Corner with Wall 1';
+  return { start, end };
 }
 
 function formatSize(widthM, heightM) {
@@ -1019,7 +1064,9 @@ function fillSharedSpan() {
   if (!host) return;
   const thick = readLength(state.unit, 'thick', { allowZero: true }) ?? rm.DEFAULT_WALL_THICKNESS_M;
   const pts = rm.computeRoomPoints(state.rooms).get(host.room.id);
-  const span = rm.sharedWallSpan(pts, host.room.walls, host.wallIdx, ui.placement.side, thick, isShapeClosed(host.room.walls));
+  // a shared-wall host's first and last walls meet the shared wall, not each other
+  const wrap = isShapeClosed(host.room) && !(host.room.anchor && host.room.anchor.shared);
+  const span = rm.sharedWallSpan(pts, host.room.walls, host.wallIdx, ui.placement.side, thick, wrap);
   setLength(state.unit, 'anchorOff', Math.round(span.startM * 1000) / 1000);
   setLength(state.unit, 'sharedLen', Math.round(span.lengthM * 1000) / 1000);
 }
@@ -1027,7 +1074,7 @@ function fillSharedSpan() {
 function openPlacementSheet() {
   const host = placementHost();
   if (!host) return;
-  const corners = cornerLabels(host.wallIdx, host.room.walls);
+  const corners = cornerLabels(host.wallIdx, host.room);
   const startCorner = corners.start.charAt(0).toLowerCase() + corners.start.slice(1);
   els.sharedStartLabel.textContent = `Shared part starts this far from ${startCorner}`;
   buildLengthInput($('#thicknessInputs'), state.unit, 'thick');
@@ -1037,14 +1084,14 @@ function openPlacementSheet() {
   ui.placementEdited = false;
   fillSharedSpan();
   els.placeSummary.textContent =
-    `Wall 1 of the new room will be the other side of ${rm.roomLabel(host.room, roomIndex(host.room))} · ` +
+    `The new room shares ${rm.roomLabel(host.room, roomIndex(host.room))} · ` +
     `Wall ${host.wallIdx + 1} (${units.formatLength(host.wall.lengthM, state.unit)}).`;
   els.roomError.classList.add('hidden');
   els.roomPanel.classList.remove('hidden');
   render();
 }
 
-// The new room's anchor and shared Wall 1 length as the sheet describes them.
+// The new room's anchor and shared length as the sheet describes them.
 function placementDraft() {
   const p = ui.placement;
   const host = placementHost();
@@ -1059,28 +1106,24 @@ function placementDraft() {
     thicknessM,
     anchor: {
       type: 'wall',
+      shared: true,
       roomId: p.roomId,
       wallId: p.wallId,
-      fromCorner: 'start',
       offsetM: offsetM ?? 0,
+      lengthM: lengthM ?? 0,
       thicknessM: thicknessM ?? rm.DEFAULT_WALL_THICKNESS_M,
       side: p.side,
     },
   };
 }
 
-// The shared wall the new room will get, drawn on the plan while placing.
+// The shared part of the wall, drawn on the plan while placing; the dot is
+// where the new room starts.
 function previewLine() {
   const draft = ui.placement && placementDraft();
   if (!draft || !draft.lengthM) return null;
-  const frame = rm.computeFrames([...state.rooms, { id: '__preview', walls: [], anchor: draft.anchor }]).get('__preview');
-  const rad = (frame.heading * Math.PI) / 180;
-  return {
-    x1: frame.x,
-    y1: frame.y,
-    x2: frame.x + draft.lengthM * Math.sin(rad),
-    y2: frame.y - draft.lengthM * Math.cos(rad),
-  };
+  const g = rm.roomGeometry([...state.rooms, { id: '__preview', walls: [], anchor: draft.anchor }]).get('__preview');
+  return { x1: g.frame.x, y1: g.frame.y, x2: g.target.x, y2: g.target.y };
 }
 
 function closeRoomPanel() {
@@ -1104,12 +1147,7 @@ function handleCreateRoom() {
   if (offsetM + lengthM > host.wall.lengthM + 0.001) {
     return showRoomError(`That runs past the end of the wall (${units.formatLength(host.wall.lengthM, state.unit)}).`);
   }
-  createRoom(draft.anchor, [{
-    id: uid(),
-    lengthM,
-    angle: 0, // direction comes from the shared wall
-    sharedWith: { roomId: host.room.id, wallId: host.wall.id },
-  }]);
+  createRoom(draft.anchor);
 }
 
 function createRoom(anchor, walls = []) {

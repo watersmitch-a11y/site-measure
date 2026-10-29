@@ -1,7 +1,7 @@
-import { computePoints, boundingBox, closingGap, area } from './geometry.js';
+import { boundingBox } from './geometry.js';
 import { formatLength, formatArea } from './units.js';
 import { openingSpan, openingTags } from './openings.js';
-import { computeFrames, insideSign as roomInsideSign, roomLabel } from './rooms.js';
+import { roomGeometry, closingGap, polygonArea, insideSign as roomInsideSign, roomLabel } from './rooms.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -26,7 +26,7 @@ function readableAngle(angle) {
 export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWallId = null, previewLine = null, print = false } = {}) {
   svg.innerHTML = '';
 
-  const frames = computeFrames(rooms);
+  const geom = roomGeometry(rooms);
   const activeRoom = rooms.find((r) => r.id === activeRoomId);
   const anyWalls = rooms.some((r) => r.walls.length > 0);
 
@@ -44,8 +44,7 @@ export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWall
     return;
   }
 
-  const roomPoints = new Map(rooms.map((r) => [r.id, computePoints(r.walls, frames.get(r.id))]));
-  const box = boundingBox([...roomPoints.values()].flat());
+  const box = boundingBox([...geom.values()].flatMap((g) => g.points));
   const padding = 1.2; // meters of padding around the drawing
   const width = Math.max(box.maxX - box.minX, 0.5) + padding * 2;
   const height = Math.max(box.maxY - box.minY, 0.5) + padding * 2;
@@ -63,7 +62,7 @@ export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWall
   const ctx = { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup, print };
 
   if (print) {
-    rooms.forEach((r, i) => drawRoom(svg, r, i, roomPoints.get(r.id), true, ctx));
+    rooms.forEach((r, i) => drawRoom(svg, r, i, geom.get(r.id), true, ctx));
     return;
   }
 
@@ -72,10 +71,10 @@ export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWall
     .filter((r) => r !== activeRoom)
     .forEach((r) => {
       const index = rooms.indexOf(r);
-      drawRoom(svg, r, index, roomPoints.get(r.id), false, ctx);
+      drawRoom(svg, r, index, geom.get(r.id), false, ctx);
     });
   if (activeRoom) {
-    drawRoom(svg, activeRoom, rooms.indexOf(activeRoom), roomPoints.get(activeRoom.id), true, ctx);
+    drawRoom(svg, activeRoom, rooms.indexOf(activeRoom), geom.get(activeRoom.id), true, ctx);
   }
 
   // the shared wall a new room will get, while it's being placed
@@ -97,7 +96,9 @@ export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWall
   svg.appendChild(hitGroup);
 }
 
-function drawRoom(svg, room, roomIndex, points, active, ctx) {
+// g: the room's geometry from roomGeometry ({ points, target })
+function drawRoom(svg, room, roomIndex, g, active, ctx) {
+  const { points, target } = g;
   const { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup, print } = ctx;
   const walls = room.walls;
   const group = el('g', { class: active ? 'plan-room active' : 'plan-room dim' });
@@ -290,7 +291,7 @@ function drawRoom(svg, room, roomIndex, points, active, ctx) {
 
   // room name at the centre of the floor area (an L-shaped room's corner
   // average can fall outside it, the area centroid usually doesn't)
-  if (walls.length >= 3) {
+  if (points.length >= 3) {
     let a2 = 0;
     let cx = 0;
     let cy = 0;
@@ -327,23 +328,24 @@ function drawRoom(svg, room, roomIndex, points, active, ctx) {
         'font-size': fontSize * 0.8,
         class: 'plan-room-name',
       });
-      sub.textContent = formatArea(area(walls), unit);
+      sub.textContent = formatArea(polygonArea(points), unit);
       group.appendChild(sub);
     }
   }
 
   if (!active || print) return;
 
-  // closing gap indicator (dashed) if shape isn't closed and has 3+ walls
-  const gap = closingGap(walls);
-  if (walls.length >= 2 && gap != null && gap > 0.05) {
-    const first = points[0];
+  // dashed line from the open end to where the room closes (its start, or
+  // the near end of a shared wall)
+  const gap = closingGap(room, g);
+  const minWalls = room.anchor && room.anchor.shared ? 1 : 2;
+  if (walls.length >= minWalls && gap != null && gap > 0.05) {
     const last = points[points.length - 1];
     const dashed = el('line', {
       x1: last.x,
       y1: last.y,
-      x2: first.x,
-      y2: first.y,
+      x2: target.x,
+      y2: target.y,
       class: 'plan-gap',
       'stroke-width': strokeWidth * 0.6,
     });

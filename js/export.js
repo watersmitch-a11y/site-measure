@@ -5,7 +5,7 @@ import { renderPlan } from './render.js';
 import * as units from './units.js';
 import * as geo from './geometry.js';
 import * as op from './openings.js';
-import { computeFrames, roomLabel } from './rooms.js';
+import * as rm from './rooms.js';
 
 function esc(str) {
   const d = document.createElement('div');
@@ -20,42 +20,44 @@ function directionName(heading) {
   return square !== undefined ? names[square % 360] : `${a.toFixed(0)}° from up`;
 }
 
-// cornerLabels(idx, walls) -> { start, end } as used in the app's panels
+// cornerLabels(idx, room) -> { start, end } as used in the app's panels
 export function exportPlan(job, { cornerLabels }) {
   const { unit, rooms } = job;
   const fmt = (m) => units.formatLength(m, unit);
   const area = (m2) => units.formatArea(m2, unit);
-  const frames = computeFrames(rooms);
+  const geom = rm.roomGeometry(rooms);
   const tags = op.openingTags(rooms.flatMap((r) => r.walls));
-  const measured = rooms.filter((r) => r.walls.length >= 3);
-  const totalArea = measured.reduce((sum, r) => sum + geo.area(r.walls), 0);
+  const measured = rooms.filter((r) => rm.roomArea(r, geom.get(r.id)) != null);
+  const totalArea = measured.reduce((sum, r) => sum + rm.roomArea(r, geom.get(r.id)), 0);
 
   const roomSections = rooms.map((room, ri) => {
     if (room.walls.length === 0) return '';
-    const headings = geo.computeHeadings(room.walls, frames.get(room.id).heading);
-    const closed = room.walls.length >= 3 && geo.closingGap(room.walls) <= 0.05;
+    const g = geom.get(room.id);
+    const headings = geo.computeHeadings(room.walls, g.frame.heading);
+    const floor = rm.roomArea(room, g);
     const wallAreas = op.wallAreas(room.walls, room.ceilingHeightM);
+    const sharedArea = rm.sharedWallArea(rooms, room, room.ceilingHeightM);
+    const span = rm.sharedSpan(rooms, room);
     const summary = [
-      room.walls.length >= 3 ? `Floor area ${area(geo.area(room.walls))}` : null,
-      `Perimeter ${fmt(geo.perimeter(room.walls))}`,
+      floor != null ? `Floor area ${area(floor)}` : null,
+      `Perimeter ${fmt(rm.roomPerimeter(rooms, room))}`,
       room.ceilingHeightM ? `Ceiling ${fmt(room.ceilingHeightM)}` : null,
-      wallAreas.wallsCounted ? `Wall area net ${area(wallAreas.net)}` : null,
-      closed ? null : 'Not closed',
+      wallAreas.wallsCounted || sharedArea ? `Wall area net ${area(wallAreas.net + sharedArea)}` : null,
+      rm.roomClosed(room, g) ? null : 'Not closed',
     ].filter(Boolean).join(' · ');
+    const sharedNote = span
+      ? `<p class="room-summary">Shares ${esc(rm.roomLabel(span.host, span.hostIndex))} wall ${span.wallIdx + 1}: ` +
+        `${fmt(span.lengthM)} of it, ${fmt(room.anchor.thicknessM)} wall.</p>`
+      : '';
 
     const wallRows = room.walls.map((w, i) => {
       const notes = [];
       if (w.ceilingHeightM) notes.push(`Ceiling ${fmt(w.ceilingHeightM)}`);
-      if (w.sharedWith) {
-        const host = rooms.find((r) => r.id === w.sharedWith.roomId);
-        const hostWall = host ? host.walls.findIndex((x) => x.id === w.sharedWith.wallId) : -1;
-        if (host && hostWall >= 0) notes.push(`Shared with ${roomLabel(host, rooms.indexOf(host))} wall ${hostWall + 1}`);
-      }
       return `<tr><td>${i + 1}</td><td>${fmt(w.lengthM)}</td><td>${directionName(headings[i])}</td><td>${esc(notes.join(' · '))}</td></tr>`;
     }).join('');
 
     const openingRows = room.walls.flatMap((w, i) => (w.openings || []).map((o) => {
-      const corners = cornerLabels(i, room.walls);
+      const corners = cornerLabels(i, room);
       const corner = o.fromCorner === 'end' ? corners.end : corners.start;
       const details = [];
       if (o.type === 'window' || o.sillM) details.push(`Sill ${fmt(o.sillM || 0)}`);
@@ -67,8 +69,9 @@ export function exportPlan(job, { cornerLabels }) {
     })).join('');
 
     return `<section>
-      <h2>${esc(roomLabel(room, ri))}</h2>
+      <h2>${esc(rm.roomLabel(room, ri))}</h2>
       <p class="room-summary">${summary}</p>
+      ${sharedNote}
       <h3>Walls</h3>
       <table><thead><tr><th>#</th><th>Length</th><th>Direction</th><th>Notes</th></tr></thead><tbody>${wallRows}</tbody></table>
       ${openingRows ? `<h3>Openings</h3>
