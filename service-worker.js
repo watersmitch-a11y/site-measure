@@ -1,4 +1,4 @@
-const CACHE_NAME = 'site-measure-v6';
+const CACHE_NAME = 'site-measure-v7';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -10,6 +10,7 @@ const CORE_ASSETS = [
   './js/render.js',
   './js/length-input.js',
   './js/openings.js',
+  './js/rooms.js',
   './manifest.json',
 ];
 

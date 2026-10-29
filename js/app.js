@@ -4,6 +4,7 @@ import * as store from './storage.js';
 import { renderPlan } from './render.js';
 import { buildLengthInput, readLength, setLength } from './length-input.js';
 import * as op from './openings.js';
+import * as rm from './rooms.js';
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -12,9 +13,38 @@ const state = {
   jobId: null,
   jobName: 'Untitled Job',
   unit: 'mm',
-  ceilingHeightM: null,
-  walls: [],
+  rooms: [rm.newRoom()],
+  activeRoomId: null,
 };
+state.activeRoomId = state.rooms[0].id;
+
+// The wall-entry, openings and ceiling code all work on the active room;
+// these aliases keep that code reading as state.walls / state.ceilingHeightM.
+function activeRoom() {
+  return state.rooms.find((r) => r.id === state.activeRoomId) || state.rooms[0];
+}
+Object.defineProperties(state, {
+  walls: {
+    get: () => activeRoom().walls,
+    set: (v) => { activeRoom().walls = v; },
+  },
+  ceilingHeightM: {
+    get: () => activeRoom().ceilingHeightM,
+    set: (v) => { activeRoom().ceilingHeightM = v; },
+  },
+});
+
+function allWalls() {
+  return state.rooms.flatMap((r) => r.walls);
+}
+
+function roomIndex(room) {
+  return state.rooms.indexOf(room);
+}
+
+function activeLabel() {
+  return rm.roomLabel(activeRoom(), roomIndex(activeRoom()));
+}
 
 const ui = {
   selectedTurn: 0, // number in degrees, or 'custom'
@@ -28,6 +58,8 @@ const ui = {
   openingCorner: 'start',
   openingHinge: 'left',
   openingSwing: 'in',
+  roomPlace: 'attach',
+  hostCorner: 'start',
 };
 
 const MEASURED_TO_KEY = 'siteMeasure.lastMeasuredTo';
@@ -77,6 +109,22 @@ const els = {
   openingNote: $('#openingNote'),
   openingError: $('#openingError'),
   cancelOpeningBtn: $('#cancelOpeningBtn'),
+  roomTabs: $('#roomTabs'),
+  roomName: $('#roomName'),
+  deleteRoomBtn: $('#deleteRoomBtn'),
+  roomAnchorNote: $('#roomAnchorNote'),
+  anchorFormNote: $('#anchorFormNote'),
+  addRoomFromWallBtn: $('#addRoomFromWallBtn'),
+  roomPanel: $('#roomPanel'),
+  closeRoomPanelBtn: $('#closeRoomPanelBtn'),
+  roomPlaceToggle: $('#roomPlaceToggle'),
+  attachSection: $('#attachSection'),
+  hostWallSelect: $('#hostWallSelect'),
+  hostCornerToggle: $('#hostCornerToggle'),
+  separateHint: $('#separateHint'),
+  roomError: $('#roomError'),
+  cancelRoomBtn: $('#cancelRoomBtn'),
+  createRoomBtn: $('#createRoomBtn'),
 };
 
 function normalizeAngle180(a) {
@@ -95,7 +143,36 @@ function headingName(angle) {
   return `${a.toFixed(0)}°`;
 }
 
+// True when the active room's start direction comes from where it was placed
+// (attached to another room's wall) rather than the Up/Down/Left/Right choice.
+function startHeadingFixed() {
+  const anchor = activeRoom().anchor;
+  return !!anchor && (anchor.type === 'wall' || (anchor.type === 'fixed' && anchor.heading != null));
+}
+
+function anchorDescription(room) {
+  const anchor = room.anchor;
+  if (!anchor || anchor.type !== 'wall') return '';
+  const host = state.rooms.find((r) => r.id === anchor.roomId);
+  if (!host) return '';
+  const wallIdx = host.walls.findIndex((w) => w.id === anchor.wallId);
+  const corners = cornerLabels(wallIdx, host.walls);
+  const corner = anchor.fromCorner === 'end' ? corners.end : corners.start;
+  return `Next to ${rm.roomLabel(host, roomIndex(host))} · Wall ${wallIdx + 1}, ` +
+    `starting ${units.formatLength(anchor.offsetM, state.unit)} from ${corner.charAt(0).toLowerCase() + corner.slice(1)}, ` +
+    `${units.formatLength(anchor.thicknessM, state.unit)} wall.`;
+}
+
 function describeWall(wall, index) {
+  if (index === 0 && startHeadingFixed()) {
+    const anchor = activeRoom().anchor;
+    if (anchor.type === 'wall') {
+      const host = state.rooms.find((r) => r.id === anchor.roomId);
+      const hostWall = host ? host.walls.findIndex((w) => w.id === anchor.wallId) + 1 : '?';
+      return host ? `Along ${rm.roomLabel(host, roomIndex(host))} · Wall ${hostWall}` : 'Along shared wall';
+    }
+    return 'Start position fixed';
+  }
   if (index === 0) return `Start facing ${headingName(wall.angle)}`;
   if (Math.abs(wall.angle) < 0.01) return 'Straight';
   const side = wall.angle > 0 ? 'Right' : 'Left';
@@ -163,21 +240,37 @@ function render() {
   const isFirstWall = state.walls.length === 0 && ui.editingId === null;
   const editingFirst = ui.editingId !== null && state.walls.findIndex((w) => w.id === ui.editingId) === 0;
 
-  els.startDirectionSection.classList.toggle('hidden', !(isFirstWall || editingFirst));
-  els.directionSection.classList.toggle('hidden', isFirstWall || editingFirst);
+  const firstWallEntry = isFirstWall || editingFirst;
+  els.startDirectionSection.classList.toggle('hidden', !firstWallEntry || startHeadingFixed());
+  els.directionSection.classList.toggle('hidden', firstWallEntry);
+  const anchorText = anchorDescription(activeRoom());
+  els.anchorFormNote.textContent = anchorText
+    ? `Wall 1 runs along the shared wall. ${anchorText}`
+    : '';
+  els.anchorFormNote.classList.toggle('hidden', !(firstWallEntry && anchorText));
 
-  const nextIndex = ui.editingId
-    ? state.walls.findIndex((w) => w.id === ui.editingId)
-    : state.walls.length;
-  els.entryTitle.textContent = ui.editingId
-    ? `Editing Wall ${nextIndex + 1}`
-    : `Wall ${nextIndex + 1}`;
+  renderEntryTitle();
   els.addWallBtn.textContent = ui.editingId ? 'Update Wall' : 'Add Wall';
 
-  renderPlan(els.planSvg, state.walls, state.unit, { selectedWallId: ui.panelWallId });
+  renderRoomTabs();
+  renderRoomCard();
+  renderPlan(els.planSvg, state.rooms, state.unit, {
+    activeRoomId: state.activeRoomId,
+    selectedWallId: ui.panelWallId,
+  });
   renderStats();
   renderWallList();
   els.closePolygonBtn.classList.toggle('hidden', state.walls.length < 2);
+}
+
+function renderEntryTitle() {
+  const nextIndex = ui.editingId
+    ? state.walls.findIndex((w) => w.id === ui.editingId)
+    : state.walls.length;
+  const roomPrefix = state.rooms.length > 1 ? `${activeLabel()} – ` : '';
+  els.entryTitle.textContent = ui.editingId
+    ? `${roomPrefix}Editing Wall ${nextIndex + 1}`
+    : `${roomPrefix}Wall ${nextIndex + 1}`;
 }
 
 function renderStats() {
@@ -203,6 +296,12 @@ function renderStats() {
   if (areas.wallsCounted > 0) {
     const partial = areas.wallsCounted < state.walls.length ? ' (some walls)' : '';
     addPill(`Wall area net: <strong>${units.formatArea(areas.net, state.unit)}</strong>${partial}`);
+  }
+
+  const measuredRooms = state.rooms.filter((r) => r.walls.length >= 3);
+  if (state.rooms.length > 1 && measuredRooms.length > 0) {
+    const total = measuredRooms.reduce((sum, r) => sum + geo.area(r.walls), 0);
+    addPill(`Job total: <strong>${units.formatArea(total, state.unit)}</strong> (${measuredRooms.length} rooms)`);
   }
 }
 
@@ -270,8 +369,8 @@ function persist() {
     id: state.jobId,
     name: state.jobName,
     unit: state.unit,
-    ceilingHeightM: state.ceilingHeightM,
-    walls: state.walls,
+    rooms: state.rooms,
+    activeRoomId: state.activeRoomId,
   });
 }
 
@@ -340,6 +439,8 @@ function showConfirm(message) {
 
 function handleUndo() {
   if (state.walls.length === 0) return;
+  const lastId = state.walls[state.walls.length - 1].id;
+  rm.pinAttachedRooms(state.rooms, (a) => a.wallId === lastId);
   const removed = state.walls.pop();
   ui.editingId = null;
   if (ui.panelWallId === removed.id) closeWallPanel();
@@ -372,6 +473,7 @@ async function handleDeleteWall(id) {
   if (idx < 0) return;
   const ok = await showConfirm(`Delete wall ${idx + 1}? Later walls will keep their relative turns.`);
   if (!ok) return;
+  rm.pinAttachedRooms(state.rooms, (a) => a.wallId === id);
   state.walls.splice(idx, 1);
   if (ui.editingId === id) resetEntryForm();
   if (ui.panelWallId === id) closeWallPanel();
@@ -391,18 +493,37 @@ function handleClosePolygon() {
 }
 
 async function handleNewJob() {
-  if (state.walls.length > 0) {
+  if (allWalls().length > 0) {
     const ok = await showConfirm('Start a new job? Current job is already auto-saved.');
     if (!ok) return;
   }
   state.jobId = null;
   state.jobName = 'Untitled Job';
-  state.ceilingHeightM = null;
-  state.walls = [];
+  state.rooms = [rm.newRoom()];
+  state.activeRoomId = state.rooms[0].id;
   closeWallPanel();
   resetEntryForm();
   buildCeilingInput();
   render();
+}
+
+// Loads a saved job into state. Jobs saved before rooms existed had a single
+// wall list on the job itself; they become a one-room job.
+function applyJob(job) {
+  state.jobId = job.id;
+  state.jobName = job.name;
+  state.unit = job.unit || 'mm';
+  if (Array.isArray(job.rooms) && job.rooms.length > 0) {
+    state.rooms = job.rooms;
+  } else {
+    const room = rm.newRoom();
+    room.ceilingHeightM = job.ceilingHeightM || null;
+    room.walls = job.walls || [];
+    state.rooms = [room];
+  }
+  state.activeRoomId = state.rooms.some((r) => r.id === job.activeRoomId)
+    ? job.activeRoomId
+    : state.rooms[0].id;
 }
 
 function handleSaveJob() {
@@ -415,11 +536,7 @@ function handleSaveJob() {
 function handleLoadJob(id) {
   const job = store.loadJob(id);
   if (!job) return;
-  state.jobId = job.id;
-  state.jobName = job.name;
-  state.unit = job.unit || 'mm';
-  state.ceilingHeightM = job.ceilingHeightM || null;
-  state.walls = job.walls || [];
+  applyJob(job);
   closeWallPanel();
   resetEntryForm();
   buildCeilingInput();
@@ -473,14 +590,14 @@ function panelWall() {
   return state.walls.find((w) => w.id === ui.panelWallId) || null;
 }
 
-function isShapeClosed() {
-  return state.walls.length >= 3 && geo.closingGap(state.walls) <= 0.05;
+function isShapeClosed(walls = state.walls) {
+  return walls.length >= 3 && geo.closingGap(walls) <= 0.05;
 }
 
-// What each end of a wall meets, e.g. "Wall 4", for the measure-from toggle.
-function cornerLabels(idx) {
-  const n = state.walls.length;
-  const closed = isShapeClosed();
+// What each end of a wall meets, e.g. "Wall 4", for the measure-from toggles.
+function cornerLabels(idx, walls = state.walls) {
+  const n = walls.length;
+  const closed = isShapeClosed(walls);
   const startWall = idx > 0 ? idx : closed ? n : null;
   const endWall = idx < n - 1 ? idx + 2 : closed ? 1 : null;
   return {
@@ -501,7 +618,8 @@ function openWallPanel(id) {
   if (idx < 0) return;
   const wall = state.walls[idx];
   ui.panelWallId = id;
-  els.wallPanelTitle.textContent = `Wall ${idx + 1} – ${units.formatLength(wall.lengthM, state.unit)}`;
+  const roomPrefix = state.rooms.length > 1 ? `${activeLabel()} – ` : '';
+  els.wallPanelTitle.textContent = `${roomPrefix}Wall ${idx + 1} – ${units.formatLength(wall.lengthM, state.unit)}`;
   buildLengthInput(els.wallCeilingInputs, state.unit, 'wallCeil', 'Same as room');
   setLength(state.unit, 'wallCeil', wall.ceilingHeightM || null);
   const corners = cornerLabels(idx);
@@ -531,7 +649,7 @@ function renderOpeningList() {
     els.openingList.appendChild(li);
     return;
   }
-  const tags = op.openingTags(state.walls);
+  const tags = op.openingTags(allWalls());
   const corners = cornerLabels(state.walls.indexOf(wall));
   openings.forEach((o) => {
     const li = document.createElement('li');
@@ -664,7 +782,7 @@ function handleSaveOpening() {
   }
   const clash = op.overlappingOpening(wall, opening);
   if (clash) {
-    return showOpeningError(`Overlaps ${op.openingTags(state.walls)[clash.id]} on this wall.`);
+    return showOpeningError(`Overlaps ${op.openingTags(allWalls())[clash.id]} on this wall.`);
   }
 
   wall.openings = wall.openings || [];
@@ -684,7 +802,7 @@ function handleSaveOpening() {
 async function handleDeleteOpening(id) {
   const wall = panelWall();
   if (!wall) return;
-  const tag = op.openingTags(state.walls)[id];
+  const tag = op.openingTags(allWalls())[id];
   const ok = await showConfirm(`Delete opening ${tag}?`);
   if (!ok) return;
   wall.openings = (wall.openings || []).filter((o) => o.id !== id);
@@ -692,6 +810,140 @@ async function handleDeleteOpening(id) {
   persist();
   renderOpeningList();
   render();
+}
+
+// ---------- rooms ----------
+
+function renderRoomTabs() {
+  els.roomTabs.innerHTML = '';
+  state.rooms.forEach((room, i) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'room-tab' + (room.id === state.activeRoomId ? ' selected' : '');
+    btn.dataset.roomId = room.id;
+    btn.textContent = rm.roomLabel(room, i);
+    els.roomTabs.appendChild(btn);
+  });
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'room-tab add';
+  add.dataset.addRoom = '1';
+  add.textContent = '+ Room';
+  els.roomTabs.appendChild(add);
+}
+
+function renderRoomCard() {
+  const room = activeRoom();
+  if (document.activeElement !== els.roomName) els.roomName.value = room.name || '';
+  els.roomName.placeholder = `Room ${roomIndex(room) + 1}`;
+  els.deleteRoomBtn.classList.toggle('hidden', state.rooms.length < 2);
+  const anchorText = anchorDescription(room);
+  els.roomAnchorNote.textContent = anchorText;
+  els.roomAnchorNote.classList.toggle('hidden', !anchorText);
+}
+
+function setActiveRoom(id) {
+  if (!state.rooms.some((r) => r.id === id)) return;
+  state.activeRoomId = id;
+  closeWallPanel();
+  resetEntryForm();
+  buildCeilingInput();
+  persist();
+  render();
+}
+
+function setRoomPlace(place) {
+  ui.roomPlace = place;
+  setToggle(els.roomPlaceToggle, 'place', place);
+  els.attachSection.classList.toggle('hidden', place !== 'attach');
+  els.separateHint.classList.toggle('hidden', place !== 'separate');
+}
+
+function setHostCorner(corner) {
+  ui.hostCorner = corner;
+  setToggle(els.hostCornerToggle, 'corner', corner);
+}
+
+function selectedHost() {
+  const [roomId, wallId] = (els.hostWallSelect.value || '|').split('|');
+  const room = state.rooms.find((r) => r.id === roomId);
+  const wallIdx = room ? room.walls.findIndex((w) => w.id === wallId) : -1;
+  return room && wallIdx >= 0 ? { room, wallIdx, wall: room.walls[wallIdx] } : null;
+}
+
+function updateHostCornerLabels() {
+  const host = selectedHost();
+  if (!host) return;
+  const corners = cornerLabels(host.wallIdx, host.room.walls);
+  els.hostCornerToggle.querySelector('[data-corner="start"]').textContent = corners.start;
+  els.hostCornerToggle.querySelector('[data-corner="end"]').textContent = corners.end;
+}
+
+// prefill: { roomId, wallId } to start from a particular wall
+function openRoomPanel(prefill = null) {
+  els.hostWallSelect.innerHTML = '';
+  state.rooms.forEach((room, ri) => {
+    room.walls.forEach((wall, wi) => {
+      const opt = document.createElement('option');
+      opt.value = `${room.id}|${wall.id}`;
+      opt.textContent = `${rm.roomLabel(room, ri)} · Wall ${wi + 1} – ${units.formatLength(wall.lengthM, state.unit)}`;
+      els.hostWallSelect.appendChild(opt);
+    });
+  });
+  const hasWalls = els.hostWallSelect.options.length > 0;
+  els.roomPlaceToggle.querySelector('[data-place="attach"]').disabled = !hasWalls;
+  if (prefill) els.hostWallSelect.value = `${prefill.roomId}|${prefill.wallId}`;
+  setRoomPlace(hasWalls ? 'attach' : 'separate');
+  setHostCorner('start');
+  updateHostCornerLabels();
+  buildLengthInput($('#anchorOffsetInputs'), state.unit, 'anchorOff');
+  setLength(state.unit, 'anchorOff', 0);
+  buildLengthInput($('#thicknessInputs'), state.unit, 'thick');
+  setLength(state.unit, 'thick', rm.DEFAULT_WALL_THICKNESS_M);
+  els.roomError.classList.add('hidden');
+  els.roomPanel.classList.remove('hidden');
+}
+
+function closeRoomPanel() {
+  els.roomPanel.classList.add('hidden');
+}
+
+function showRoomError(message) {
+  els.roomError.textContent = message;
+  els.roomError.classList.remove('hidden');
+}
+
+function handleCreateRoom() {
+  let anchor;
+  if (ui.roomPlace === 'attach') {
+    const host = selectedHost();
+    if (!host) return showRoomError('Pick the shared wall.');
+    const offsetM = readLength(state.unit, 'anchorOff', { allowZero: true });
+    const thicknessM = readLength(state.unit, 'thick', { allowZero: true });
+    if (offsetM == null) return showRoomError('Enter the distance from the corner (0 if the rooms line up).');
+    if (thicknessM == null) return showRoomError('Enter the wall thickness.');
+    if (offsetM > host.wall.lengthM) {
+      return showRoomError(`That's past the end of the wall (${units.formatLength(host.wall.lengthM, state.unit)}).`);
+    }
+    anchor = { type: 'wall', roomId: host.room.id, wallId: host.wall.id, fromCorner: ui.hostCorner, offsetM, thicknessM };
+  } else {
+    anchor = rm.separateRoomAnchor(state.rooms);
+  }
+  const room = rm.newRoom(anchor);
+  state.rooms.push(room);
+  closeRoomPanel();
+  setActiveRoom(room.id);
+  els.entryTitle.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+async function handleDeleteRoom() {
+  if (state.rooms.length < 2) return;
+  const room = activeRoom();
+  const ok = await showConfirm(`Delete ${activeLabel()} and all its walls and openings? This cannot be undone.`);
+  if (!ok) return;
+  rm.pinAttachedRooms(state.rooms, (a) => a.roomId === room.id);
+  state.rooms = state.rooms.filter((r) => r.id !== room.id);
+  setActiveRoom(state.rooms[0].id);
 }
 
 // ---------- event wiring ----------
@@ -773,9 +1025,32 @@ els.ceilingInputs.addEventListener('input', () => {
 });
 els.ceilingInputs.addEventListener('change', persist);
 
+// Shared walls of adjoining rooms sit a wall-thickness apart and their tap
+// areas overlap, so pick the wall line nearest the tap, not the topmost one.
+function nearestHitLine(e) {
+  const ctm = els.planSvg.getScreenCTM();
+  if (!ctm) return null;
+  const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
+  let best = null;
+  let bestDist = Infinity;
+  els.planSvg.querySelectorAll('.plan-hit').forEach((line) => {
+    const [x1, y1, x2, y2] = ['x1', 'y1', 'x2', 'y2'].map((a) => Number(line.getAttribute(a)));
+    const lenSq = (x2 - x1) ** 2 + (y2 - y1) ** 2 || 1;
+    const t = Math.max(0, Math.min(1, ((pt.x - x1) * (x2 - x1) + (pt.y - y1) * (y2 - y1)) / lenSq));
+    const d = Math.hypot(pt.x - (x1 + t * (x2 - x1)), pt.y - (y1 + t * (y2 - y1)));
+    if (d < bestDist && d <= Number(line.getAttribute('stroke-width')) / 2) {
+      best = line;
+      bestDist = d;
+    }
+  });
+  return best;
+}
+
 els.planSvg.addEventListener('click', (e) => {
-  const hit = e.target.closest('[data-wall-id]');
-  if (hit) openWallPanel(hit.dataset.wallId);
+  const hit = nearestHitLine(e);
+  if (!hit) return;
+  if (hit.dataset.roomId !== state.activeRoomId) setActiveRoom(hit.dataset.roomId);
+  openWallPanel(hit.dataset.wallId);
 });
 
 els.closeWallPanelBtn.addEventListener('click', () => {
@@ -833,6 +1108,48 @@ els.openingList.addEventListener('click', (e) => {
   if (delBtn) handleDeleteOpening(delBtn.dataset.opId);
 });
 
+els.roomTabs.addEventListener('click', (e) => {
+  const btn = e.target.closest('.room-tab');
+  if (!btn) return;
+  if (btn.dataset.addRoom) openRoomPanel();
+  else setActiveRoom(btn.dataset.roomId);
+});
+// Only light updates here: re-rendering the wall list while the name box
+// loses focus would swallow a tap on a wall row.
+els.roomName.addEventListener('input', () => {
+  activeRoom().name = els.roomName.value.trim();
+  renderRoomTabs();
+  renderEntryTitle();
+  renderPlan(els.planSvg, state.rooms, state.unit, {
+    activeRoomId: state.activeRoomId,
+    selectedWallId: ui.panelWallId,
+  });
+});
+els.roomName.addEventListener('change', persist);
+els.deleteRoomBtn.addEventListener('click', handleDeleteRoom);
+els.addRoomFromWallBtn.addEventListener('click', () => {
+  const wallId = ui.panelWallId;
+  const roomId = state.activeRoomId;
+  closeWallPanel();
+  render();
+  openRoomPanel({ roomId, wallId });
+});
+els.closeRoomPanelBtn.addEventListener('click', closeRoomPanel);
+els.cancelRoomBtn.addEventListener('click', closeRoomPanel);
+els.roomPanel.addEventListener('click', (e) => {
+  if (e.target === els.roomPanel) closeRoomPanel();
+});
+els.roomPlaceToggle.addEventListener('click', (e) => {
+  const btn = e.target.closest('.lr-btn');
+  if (btn && !btn.disabled) setRoomPlace(btn.dataset.place);
+});
+els.hostWallSelect.addEventListener('change', updateHostCornerLabels);
+els.hostCornerToggle.addEventListener('click', (e) => {
+  const btn = e.target.closest('.lr-btn');
+  if (btn) setHostCorner(btn.dataset.corner);
+});
+els.createRoomBtn.addEventListener('click', handleCreateRoom);
+
 // ---------- init ----------
 
 function init() {
@@ -846,11 +1163,7 @@ function init() {
     const mostRecent = [...jobs].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0];
     const job = store.loadJob(mostRecent.id);
     if (job) {
-      state.jobId = job.id;
-      state.jobName = job.name;
-      state.unit = job.unit || 'mm';
-      state.ceilingHeightM = job.ceilingHeightM || null;
-      state.walls = job.walls || [];
+      applyJob(job);
       buildLengthInputs();
     }
   }

@@ -5,18 +5,21 @@
 // For every later wall, `angle` is the TURN relative to the previous wall's
 // heading (clockwise positive, counter-clockwise negative).
 
-export function computeHeadings(walls) {
+// An optional frame places the chain on the job plan: { x, y, heading }.
+// A heading of null (or no frame) uses the first wall's own angle; rooms
+// attached to another room's wall get their starting heading from the frame.
+export function computeHeadings(walls, startHeading = null) {
   let heading = 0;
   return walls.map((w, i) => {
-    heading = i === 0 ? w.angle : heading + w.angle;
+    heading = i === 0 ? (startHeading ?? w.angle) : heading + w.angle;
     return heading;
   });
 }
 
-export function computePoints(walls) {
-  const headings = computeHeadings(walls);
-  let x = 0;
-  let y = 0;
+export function computePoints(walls, frame = null) {
+  const headings = computeHeadings(walls, frame ? frame.heading : null);
+  let x = frame ? frame.x : 0;
+  let y = frame ? frame.y : 0;
   const points = [{ x, y }];
   walls.forEach((w, i) => {
     const rad = (headings[i] * Math.PI) / 180;

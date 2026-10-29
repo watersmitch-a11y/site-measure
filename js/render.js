@@ -1,6 +1,7 @@
 import { computePoints, boundingBox, closingGap } from './geometry.js';
 import { formatLength } from './units.js';
 import { openingSpan, openingTags } from './openings.js';
+import { computeFrames, insideSign as roomInsideSign, roomLabel } from './rooms.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -18,11 +19,16 @@ function readableAngle(angle) {
   return a;
 }
 
-// Renders the wall chain into the given SVG container element.
-export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
+// Renders every room of the job. The active room gets full detail (lengths,
+// arrows, start/end markers); other rooms are drawn dimmed with their name.
+export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWallId = null } = {}) {
   svg.innerHTML = '';
 
-  if (walls.length === 0) {
+  const frames = computeFrames(rooms);
+  const activeRoom = rooms.find((r) => r.id === activeRoomId);
+  const anyWalls = rooms.some((r) => r.walls.length > 0);
+
+  if (!anyWalls) {
     svg.setAttribute('viewBox', '0 0 10 10');
     const w = el('text', {
       x: 5,
@@ -36,8 +42,8 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
     return;
   }
 
-  const points = computePoints(walls);
-  const box = boundingBox(points);
+  const roomPoints = new Map(rooms.map((r) => [r.id, computePoints(r.walls, frames.get(r.id))]));
+  const box = boundingBox([...roomPoints.values()].flat());
   const padding = 1.2; // meters of padding around the drawing
   const width = Math.max(box.maxX - box.minX, 0.5) + padding * 2;
   const height = Math.max(box.maxY - box.minY, 0.5) + padding * 2;
@@ -48,23 +54,36 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
 
   const strokeWidth = Math.max(width, height) * 0.012;
   const fontSize = Math.max(width, height) * 0.045;
-  const tags = openingTags(walls);
+  const tags = openingTags(rooms.flatMap((r) => r.walls));
 
-  // Which side of each wall is inside the room: sign of the (closed) shoelace
-  // sum. With y pointing down, a positive sum means the room is on the
-  // right-hand side of the direction of travel, i.e. along (nx, ny) below.
-  let shoelace = 0;
-  points.forEach((p, i) => {
-    const q = points[(i + 1) % points.length];
-    shoelace += p.x * q.y - q.x * p.y;
-  });
-  const insideSign = shoelace >= 0 ? 1 : -1;
-
-  const group = el('g');
-  svg.appendChild(group);
   const hitGroup = el('g');
+  const ctx = { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup };
 
-  // wall segments
+  // inactive rooms first so the active room draws on top
+  rooms
+    .filter((r) => r !== activeRoom)
+    .forEach((r) => {
+      const index = rooms.indexOf(r);
+      drawRoom(svg, r, index, roomPoints.get(r.id), false, ctx);
+    });
+  if (activeRoom) {
+    drawRoom(svg, activeRoom, rooms.indexOf(activeRoom), roomPoints.get(activeRoom.id), true, ctx);
+  }
+
+  svg.appendChild(hitGroup);
+}
+
+function drawRoom(svg, room, roomIndex, points, active, ctx) {
+  const { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup } = ctx;
+  const walls = room.walls;
+  const group = el('g', { class: active ? 'plan-room active' : 'plan-room dim' });
+  svg.appendChild(group);
+
+  // Which side of each wall is inside the room. With y pointing down, +1
+  // means the room is on the right-hand side of the direction of travel,
+  // i.e. along (nx, ny) below.
+  const insideSign = roomInsideSign(points);
+
   walls.forEach((w, i) => {
     const a = points[i];
     const b = points[i + 1];
@@ -82,7 +101,7 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
       y1: a.y,
       x2: b.x,
       y2: b.y,
-      class: 'plan-wall' + (w.id === selectedWallId ? ' selected' : ''),
+      class: 'plan-wall' + (active && w.id === selectedWallId ? ' selected' : ''),
       'stroke-width': strokeWidth,
     });
     group.appendChild(line);
@@ -181,50 +200,52 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
       group.appendChild(tag);
     });
 
-    // direction arrowhead at midpoint
-    const mx = (a.x + b.x) / 2;
-    const my = (a.y + b.y) / 2;
-    const arrow = el('path', {
-      d: `M ${-fontSize * 0.35} ${-fontSize * 0.35} L ${fontSize * 0.35} 0 L ${-fontSize * 0.35} ${fontSize * 0.35} Z`,
-      transform: `translate(${mx}, ${my}) rotate(${angle})`,
-      class: 'plan-arrow',
-    });
-    group.appendChild(arrow);
-
-    // length label outside the room, rotated to run along the wall. Centred
-    // on the wall unless an outward door swing is there, in which case it
-    // moves to the middle of the longest clear stretch.
-    const blocked = (w.openings || [])
-      .filter((o) => o.type === 'door' && o.swing === 'out')
-      .map((o) => openingSpan(w, o))
-      .sort((p, q) => p.startM - q.startM);
-    const labelText = `${i + 1}. ${formatLength(w.lengthM, unit)}`;
-    const halfLabel = labelText.length * fontSize * 0.28; // approx. half the text width
-    let labelAt = w.lengthM / 2;
-    if (blocked.some((sp) => sp.startM < labelAt + halfLabel && sp.endM > labelAt - halfLabel)) {
-      let best = { from: 0, to: 0 };
-      let cursor = 0;
-      blocked.concat([{ startM: w.lengthM, endM: w.lengthM }]).forEach((sp) => {
-        if (sp.startM - cursor > best.to - best.from) best = { from: cursor, to: sp.startM };
-        cursor = Math.max(cursor, sp.endM);
+    if (active) {
+      // direction arrowhead at midpoint
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      const arrow = el('path', {
+        d: `M ${-fontSize * 0.35} ${-fontSize * 0.35} L ${fontSize * 0.35} 0 L ${-fontSize * 0.35} ${fontSize * 0.35} Z`,
+        transform: `translate(${mx}, ${my}) rotate(${angle})`,
+        class: 'plan-arrow',
       });
-      labelAt = (best.from + best.to) / 2;
+      group.appendChild(arrow);
+
+      // length label outside the room, rotated to run along the wall. Centred
+      // on the wall unless an outward door swing is there, in which case it
+      // moves to the middle of the longest clear stretch.
+      const blocked = (w.openings || [])
+        .filter((o) => o.type === 'door' && o.swing === 'out')
+        .map((o) => openingSpan(w, o))
+        .sort((p, q) => p.startM - q.startM);
+      const labelText = `${i + 1}. ${formatLength(w.lengthM, unit)}`;
+      const halfLabel = labelText.length * fontSize * 0.28; // approx. half the text width
+      let labelAt = w.lengthM / 2;
+      if (blocked.some((sp) => sp.startM < labelAt + halfLabel && sp.endM > labelAt - halfLabel)) {
+        let best = { from: 0, to: 0 };
+        let cursor = 0;
+        blocked.concat([{ startM: w.lengthM, endM: w.lengthM }]).forEach((sp) => {
+          if (sp.startM - cursor > best.to - best.from) best = { from: cursor, to: sp.startM };
+          cursor = Math.max(cursor, sp.endM);
+        });
+        labelAt = (best.from + best.to) / 2;
+      }
+      const labelBase = along(labelAt);
+      const offset = fontSize * 0.9 * -insideSign;
+      const lx = labelBase.x + nx * offset;
+      const ly = labelBase.y + ny * offset;
+      const label = el('text', {
+        x: lx,
+        y: ly,
+        'text-anchor': 'middle',
+        'dominant-baseline': 'central',
+        'font-size': fontSize,
+        transform: `rotate(${textAngle}, ${lx}, ${ly})`,
+        class: 'plan-label' + (w.id === selectedWallId ? ' selected' : ''),
+      });
+      label.textContent = labelText;
+      group.appendChild(label);
     }
-    const labelBase = along(labelAt);
-    const offset = fontSize * 0.9 * -insideSign;
-    const lx = labelBase.x + nx * offset;
-    const ly = labelBase.y + ny * offset;
-    const label = el('text', {
-      x: lx,
-      y: ly,
-      'text-anchor': 'middle',
-      'dominant-baseline': 'central',
-      'font-size': fontSize,
-      transform: `rotate(${textAngle}, ${lx}, ${ly})`,
-      class: 'plan-label' + (w.id === selectedWallId ? ' selected' : ''),
-    });
-    label.textContent = labelText;
-    group.appendChild(label);
 
     // wide invisible line on top so walls are easy to tap
     hitGroup.appendChild(el('line', {
@@ -235,8 +256,43 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
       class: 'plan-hit',
       'stroke-width': Math.max(fontSize * 1.6, strokeWidth * 6),
       'data-wall-id': w.id,
+      'data-room-id': room.id,
     }));
   });
+
+  // room name at the centre of the floor area (an L-shaped room's corner
+  // average can fall outside it, the area centroid usually doesn't)
+  if (walls.length >= 3) {
+    let a2 = 0;
+    let cx = 0;
+    let cy = 0;
+    points.forEach((p, i) => {
+      const q = points[(i + 1) % points.length];
+      const cross = p.x * q.y - q.x * p.y;
+      a2 += cross;
+      cx += (p.x + q.x) * cross;
+      cy += (p.y + q.y) * cross;
+    });
+    if (Math.abs(a2) > 1e-9) {
+      cx /= 3 * a2;
+      cy /= 3 * a2;
+    } else {
+      cx = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+      cy = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+    }
+    const name = el('text', {
+      x: cx,
+      y: cy,
+      'text-anchor': 'middle',
+      'dominant-baseline': 'central',
+      'font-size': fontSize * 0.9,
+      class: 'plan-room-name',
+    });
+    name.textContent = roomLabel(room, roomIndex);
+    group.appendChild(name);
+  }
+
+  if (!active) return;
 
   // closing gap indicator (dashed) if shape isn't closed and has 3+ walls
   const gap = closingGap(walls);
@@ -254,7 +310,8 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
     group.appendChild(dashed);
   }
 
-  // start marker
+  // start marker (shown even before the first wall, so an attached room's
+  // starting corner is visible)
   const start = points[0];
   group.appendChild(
     el('circle', {
@@ -275,15 +332,15 @@ export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
   group.appendChild(startLabel);
 
   // current open end marker
-  const end = points[points.length - 1];
-  group.appendChild(
-    el('circle', {
-      cx: end.x,
-      cy: end.y,
-      r: fontSize * 0.35,
-      class: 'plan-end',
-    })
-  );
-
-  svg.appendChild(hitGroup);
+  if (walls.length > 0) {
+    const end = points[points.length - 1];
+    group.appendChild(
+      el('circle', {
+        cx: end.x,
+        cy: end.y,
+        r: fontSize * 0.35,
+        class: 'plan-end',
+      })
+    );
+  }
 }

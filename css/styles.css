@@ -462,3 +462,62 @@ main {
 .error-text.hidden,
 .opening-form.hidden,
 #addOpeningBtn.hidden { display: none; }
+
+/* ---------- rooms ---------- */
+
+.room-tabs {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding-bottom: 0.1rem;
+  -webkit-overflow-scrolling: touch;
+}
+.room-tab {
+  flex-shrink: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 0.45rem 0.9rem;
+  font-size: 0.85rem;
+  min-height: 38px;
+}
+.room-tab.selected { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }
+.room-tab.add { color: var(--accent); border-style: dashed; }
+
+.room-card-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
+.room-name-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 1.05rem;
+  font-weight: 600;
+  padding: 0.3rem 0;
+}
+.room-name-input:focus { outline: none; border-bottom-color: var(--accent); }
+.danger-text { color: var(--red); }
+.text-btn.hidden,
+.secondary-btn.hidden,
+.anchor-note.hidden,
+.hint-text.hidden,
+#attachSection.hidden { display: none; }
+
+.anchor-note {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  margin-bottom: 0.75rem;
+}
+.hint-text { font-size: 0.8rem; color: var(--text-dim); margin: 0.75rem 0 0; }
+#attachSection .field-label { margin-top: 0.75rem; }
+#hostCornerToggle .lr-btn { font-size: 0.85rem; }
+
+.plan-room.dim { opacity: 0.4; }
+.plan-room-name { fill: var(--text-dim); font-weight: 600; pointer-events: none; }
+.plan-room.active .plan-room-name { fill: var(--text); opacity: 0.55; }

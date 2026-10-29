@@ -35,6 +35,8 @@
   </header>
 
   <main>
+    <div id="roomTabs" class="room-tabs"></div>
+
     <div class="plan-wrap">
       <svg id="planSvg" class="plan-svg" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet"></svg>
     </div>
@@ -42,7 +44,12 @@
     <div id="statsBar" class="stats-bar"></div>
 
     <section class="room-card">
-      <div class="field-label">Ceiling height (room)</div>
+      <div class="room-card-row">
+        <input id="roomName" class="room-name-input" type="text" aria-label="Room name" />
+        <button id="deleteRoomBtn" type="button" class="text-btn danger-text hidden">Delete room</button>
+      </div>
+      <div id="roomAnchorNote" class="anchor-note hidden"></div>
+      <div class="field-label">Ceiling height</div>
       <div id="ceilingInputs" class="length-inputs"></div>
     </section>
 
@@ -74,6 +81,8 @@
           </div>
         </div>
       </div>
+
+      <div id="anchorFormNote" class="anchor-note hidden"></div>
 
       <div id="startDirectionSection" class="direction-section">
         <div class="field-label">Starting direction (which way you're facing)</div>
@@ -132,6 +141,7 @@
         </div>
         <ul id="openingList" class="wall-list"></ul>
         <button id="addOpeningBtn" type="button" class="secondary-btn">+ Add Opening</button>
+        <button id="addRoomFromWallBtn" type="button" class="secondary-btn">+ Add Room on Other Side of This Wall</button>
       </div>
 
       <form id="openingForm" class="panel-section opening-form hidden">
@@ -199,6 +209,50 @@
   </div>
 
 </div>
+<div id="roomPanel" class="jobs-panel hidden">
+    <div class="jobs-panel-inner wall-panel-inner">
+      <div class="jobs-panel-header">
+        <h2>Add Room</h2>
+        <button id="closeRoomPanelBtn" class="icon-btn">&times;</button>
+      </div>
+
+      <div class="panel-section">
+        <div class="lr-toggle" id="roomPlaceToggle">
+          <button type="button" class="lr-btn" data-place="attach">Next to a wall</button>
+          <button type="button" class="lr-btn" data-place="separate">Separate</button>
+        </div>
+      </div>
+
+      <div id="attachSection" class="panel-section">
+        <div class="field-label">Shared wall</div>
+        <select id="hostWallSelect" class="panel-select"></select>
+
+        <div class="field-label">New room's first corner is measured from</div>
+        <div class="lr-toggle" id="hostCornerToggle">
+          <button type="button" class="lr-btn" data-corner="start">Start corner</button>
+          <button type="button" class="lr-btn" data-corner="end">End corner</button>
+        </div>
+
+        <div class="field-label">Distance along the wall from that corner</div>
+        <div id="anchorOffsetInputs" class="length-inputs"></div>
+
+        <div class="field-label">Wall thickness</div>
+        <div id="thicknessInputs" class="length-inputs"></div>
+
+        <p class="hint-text">Wall 1 of the new room runs along this wall, away from that corner. Then walk the room as normal.</p>
+      </div>
+
+      <p id="separateHint" class="hint-text panel-section hidden">The new room is drawn beside the others. Pick its starting direction when you add Wall 1.</p>
+
+      <p id="roomError" class="error-text hidden"></p>
+
+      <div class="confirm-actions panel-section">
+        <button type="button" id="cancelRoomBtn" class="secondary-btn">Cancel</button>
+        <button type="button" id="createRoomBtn" class="primary-btn">Create Room</button>
+      </div>
+    </div>
+  </div>
+
 <script type="module" src="js/app.js"></script>
 </body>
 </html>
