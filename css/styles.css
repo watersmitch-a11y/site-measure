@@ -9,6 +9,7 @@
   --accent-dim: #7a5115;
   --green: #2ecc71;
   --red: #e74c3c;
+  --opening: #4da3ff;
   --radius: 10px;
   font-size: 16px;
 }
@@ -408,3 +409,55 @@ main {
   text-align: center;
   padding: 1rem 0;
 }
+
+/* ---------- ceiling height, wall selection and openings ---------- */
+
+.room-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+}
+
+.plan-wall.selected { stroke: var(--accent); }
+.plan-label.selected { fill: var(--accent); }
+.plan-hit { stroke: transparent; fill: none; pointer-events: stroke; cursor: pointer; }
+.plan-cut { stroke: var(--surface); stroke-linecap: butt; }
+.plan-opening { stroke: var(--opening); stroke-linecap: butt; }
+.plan-opening.dashed { stroke-dasharray: 0.12 0.08; }
+.plan-opening.dotted { stroke-dasharray: 0.04 0.06; }
+.plan-opening-label { fill: var(--opening); }
+
+.wall-row .wall-info { cursor: pointer; }
+.wall-row .wall-hint { font-size: 0.72rem; color: var(--accent); margin-top: 0.15rem; }
+.warn-text { color: var(--red); }
+
+.wall-panel-inner { max-height: 90vh; }
+.panel-section { margin-top: 1rem; }
+.panel-section h3 { margin: 0 0 0.25rem; font-size: 1rem; }
+.opening-form .field-label { margin-top: 0.75rem; }
+.opening-form .confirm-actions { margin-top: 1rem; }
+#openingTypeButtons .dir-btn { min-height: 44px; }
+#cornerToggle .lr-btn { font-size: 0.85rem; }
+#sillSection.hidden { display: none; }
+
+.panel-select,
+.panel-text {
+  width: 100%;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.7rem;
+  font-size: 1rem;
+  min-height: 48px;
+}
+
+.error-text {
+  color: var(--red);
+  font-size: 0.85rem;
+  margin: 0.75rem 0 0;
+}
+.error-text.hidden,
+.opening-form.hidden,
+#addOpeningBtn.hidden { display: none; }

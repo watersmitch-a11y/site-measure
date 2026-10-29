@@ -2,6 +2,8 @@ import * as geo from './geometry.js';
 import * as units from './units.js';
 import * as store from './storage.js';
 import { renderPlan } from './render.js';
+import { buildLengthInput, readLength, setLength } from './length-input.js';
+import * as op from './openings.js';
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -10,6 +12,7 @@ const state = {
   jobId: null,
   jobName: 'Untitled Job',
   unit: 'mm',
+  ceilingHeightM: null,
   walls: [],
 };
 
@@ -19,7 +22,13 @@ const ui = {
   customDeg: null,
   startHeading: 0,
   editingId: null,
+  panelWallId: null, // wall whose details panel is open
+  editingOpeningId: null,
+  openingType: 'door',
+  openingCorner: 'start',
 };
+
+const MEASURED_TO_KEY = 'siteMeasure.lastMeasuredTo';
 
 const els = {
   jobName: $('#jobName'),
@@ -47,6 +56,22 @@ const els = {
   jobsPanel: $('#jobsPanel'),
   jobsList: $('#jobsList'),
   closeJobsBtn: $('#closeJobsBtn'),
+  ceilingInputs: $('#ceilingInputs'),
+  wallPanel: $('#wallPanel'),
+  wallPanelTitle: $('#wallPanelTitle'),
+  closeWallPanelBtn: $('#closeWallPanelBtn'),
+  wallCeilingInputs: $('#wallCeilingInputs'),
+  openingList: $('#openingList'),
+  addOpeningBtn: $('#addOpeningBtn'),
+  openingForm: $('#openingForm'),
+  openingFormTitle: $('#openingFormTitle'),
+  openingTypeButtons: $('#openingTypeButtons'),
+  measuredToSelect: $('#measuredToSelect'),
+  cornerToggle: $('#cornerToggle'),
+  sillSection: $('#sillSection'),
+  openingNote: $('#openingNote'),
+  openingError: $('#openingError'),
+  cancelOpeningBtn: $('#cancelOpeningBtn'),
 };
 
 function normalizeAngle180(a) {
@@ -75,60 +100,16 @@ function describeWall(wall, index) {
 // ---------- length input rendering ----------
 
 function buildLengthInputs() {
-  els.lengthInputs.innerHTML = '';
-  if (state.unit === 'ft-in') {
-    const feetInput = document.createElement('input');
-    feetInput.type = 'number';
-    feetInput.inputMode = 'decimal';
-    feetInput.placeholder = 'Feet';
-    feetInput.id = 'lenFeet';
-    feetInput.min = '0';
-    const inSuffix1 = document.createElement('span');
-    inSuffix1.className = 'unit-suffix';
-    inSuffix1.textContent = "ft";
-    const inchesInput = document.createElement('input');
-    inchesInput.type = 'number';
-    inchesInput.inputMode = 'decimal';
-    inchesInput.placeholder = 'Inches';
-    inchesInput.id = 'lenInches';
-    inchesInput.min = '0';
-    inchesInput.max = '11.9';
-    const inSuffix2 = document.createElement('span');
-    inSuffix2.className = 'unit-suffix';
-    inSuffix2.textContent = 'in';
-    els.lengthInputs.append(feetInput, inSuffix1, inchesInput, inSuffix2);
-  } else {
-    const singleUnitConfig = {
-      mm: { placeholder: 'Millimeters', suffix: 'mm', step: '1' },
-      m: { placeholder: 'Meters', suffix: 'm', step: '0.01' },
-      ft: { placeholder: 'Feet', suffix: 'ft', step: '0.01' },
-    };
-    const cfg = singleUnitConfig[state.unit];
-    const input = document.createElement('input');
-    input.type = 'number';
-    input.inputMode = 'decimal';
-    input.placeholder = cfg.placeholder;
-    input.id = 'lenSingle';
-    input.min = '0';
-    input.step = cfg.step;
-    const suffix = document.createElement('span');
-    suffix.className = 'unit-suffix';
-    suffix.textContent = cfg.suffix;
-    els.lengthInputs.append(input, suffix);
-  }
+  buildLengthInput(els.lengthInputs, state.unit, 'len');
 }
 
 function readLengthMeters() {
-  if (state.unit === 'ft-in') {
-    const feet = parseFloat($('#lenFeet').value) || 0;
-    const inches = parseFloat($('#lenInches').value) || 0;
-    if (feet <= 0 && inches <= 0) return null;
-    return units.feetInchesToMeters(feet, inches);
-  }
-  const raw = $('#lenSingle').value;
-  if (!raw) return null;
-  if (state.unit === 'mm') return units.parseMm(raw);
-  return state.unit === 'm' ? units.parseMeters(raw) : units.parseDecimalFeet(raw);
+  return readLength(state.unit, 'len');
+}
+
+function buildCeilingInput() {
+  buildLengthInput(els.ceilingInputs, state.unit, 'ceil', state.unit === 'mm' ? 'e.g. 2700' : undefined);
+  setLength(state.unit, 'ceil', state.ceilingHeightM);
 }
 
 function clearLengthInputs() {
@@ -188,7 +169,7 @@ function render() {
     : `Wall ${nextIndex + 1}`;
   els.addWallBtn.textContent = ui.editingId ? 'Update Wall' : 'Add Wall';
 
-  renderPlan(els.planSvg, state.walls, state.unit);
+  renderPlan(els.planSvg, state.walls, state.unit, { selectedWallId: ui.panelWallId });
   renderStats();
   renderWallList();
   els.closePolygonBtn.classList.toggle('hidden', state.walls.length < 2);
@@ -212,6 +193,12 @@ function renderStats() {
       addPill(`Closed ✓`);
     }
   }
+
+  const areas = op.wallAreas(state.walls, state.ceilingHeightM);
+  if (areas.wallsCounted > 0) {
+    const partial = areas.wallsCounted < state.walls.length ? ' (some walls)' : '';
+    addPill(`Wall area net: <strong>${units.formatArea(areas.net, state.unit)}</strong>${partial}`);
+  }
 }
 
 function addPill(html, warn = false) {
@@ -233,11 +220,24 @@ function renderWallList() {
   state.walls.forEach((wall, i) => {
     const li = document.createElement('li');
     li.className = 'wall-row';
+    const extras = [describeWall(wall, i)];
+    const openings = wall.openings || [];
+    if (openings.length) {
+      const counts = {};
+      openings.forEach((o) => {
+        const label = op.OPENING_TYPES[o.type].label.toLowerCase();
+        counts[label] = (counts[label] || 0) + 1;
+      });
+      extras.push(Object.entries(counts).map(([t, n]) => `${n} ${t}${n > 1 ? 's' : ''}`).join(', '));
+    }
+    if (wall.ceilingHeightM) extras.push(`ceiling ${units.formatLength(wall.ceilingHeightM, state.unit)}`);
+    const warn = openings.some((o) => !op.fitsOnWall(wall, o)) ? ' <span class="warn-text">⚠ check openings</span>' : '';
     li.innerHTML = `
       <div class="wall-idx">${i + 1}</div>
-      <div class="wall-info">
+      <div class="wall-info" data-id="${wall.id}">
         <div class="wall-len">${units.formatLength(wall.lengthM, state.unit)}</div>
-        <div class="wall-dir">${describeWall(wall, i)}</div>
+        <div class="wall-dir">${extras.join(' · ')}${warn}</div>
+        <div class="wall-hint">${openings.length ? 'Tap to edit openings' : 'Tap to add openings'} ›</div>
       </div>
       <button class="edit-btn" data-id="${wall.id}" title="Edit">&#9998;</button>
       <button class="delete-btn" data-id="${wall.id}" title="Delete">&#128465;</button>
@@ -265,6 +265,7 @@ function persist() {
     id: state.jobId,
     name: state.jobName,
     unit: state.unit,
+    ceilingHeightM: state.ceilingHeightM,
     walls: state.walls,
   });
 }
@@ -334,8 +335,9 @@ function showConfirm(message) {
 
 function handleUndo() {
   if (state.walls.length === 0) return;
-  state.walls.pop();
+  const removed = state.walls.pop();
   ui.editingId = null;
+  if (ui.panelWallId === removed.id) closeWallPanel();
   persist();
   render();
 }
@@ -355,17 +357,7 @@ function handleEditWall(id) {
     els.customAngleInput.value = Math.abs(wall.angle);
   }
   buildLengthInputs();
-  if (state.unit === 'ft-in') {
-    const { feet, inches } = units.metersToFeetInches(wall.lengthM);
-    $('#lenFeet').value = feet;
-    $('#lenInches').value = Math.round(inches * 8) / 8;
-  } else if (state.unit === 'mm') {
-    $('#lenSingle').value = Math.round(units.metersToMm(wall.lengthM));
-  } else if (state.unit === 'm') {
-    $('#lenSingle').value = wall.lengthM.toFixed(2);
-  } else {
-    $('#lenSingle').value = units.metersToFeet(wall.lengthM).toFixed(2);
-  }
+  setLength(state.unit, 'len', wall.lengthM);
   render();
   els.entryTitle.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -377,6 +369,7 @@ async function handleDeleteWall(id) {
   if (!ok) return;
   state.walls.splice(idx, 1);
   if (ui.editingId === id) resetEntryForm();
+  if (ui.panelWallId === id) closeWallPanel();
   persist();
   render();
 }
@@ -399,8 +392,11 @@ async function handleNewJob() {
   }
   state.jobId = null;
   state.jobName = 'Untitled Job';
+  state.ceilingHeightM = null;
   state.walls = [];
+  closeWallPanel();
   resetEntryForm();
+  buildCeilingInput();
   render();
 }
 
@@ -417,8 +413,11 @@ function handleLoadJob(id) {
   state.jobId = job.id;
   state.jobName = job.name;
   state.unit = job.unit || 'mm';
+  state.ceilingHeightM = job.ceilingHeightM || null;
   state.walls = job.walls || [];
+  closeWallPanel();
   resetEntryForm();
+  buildCeilingInput();
   render();
   els.jobsPanel.classList.add('hidden');
 }
@@ -463,6 +462,209 @@ function escapeHtml(str) {
   return d.innerHTML;
 }
 
+// ---------- wall details panel (ceiling override + openings) ----------
+
+function panelWall() {
+  return state.walls.find((w) => w.id === ui.panelWallId) || null;
+}
+
+function isShapeClosed() {
+  return state.walls.length >= 3 && geo.closingGap(state.walls) <= 0.05;
+}
+
+// What each end of a wall meets, e.g. "Wall 4", for the measure-from toggle.
+function cornerLabels(idx) {
+  const n = state.walls.length;
+  const closed = isShapeClosed();
+  const startWall = idx > 0 ? idx : closed ? n : null;
+  const endWall = idx < n - 1 ? idx + 2 : closed ? 1 : null;
+  return {
+    start: startWall ? `Corner with Wall ${startWall}` : 'Start point',
+    end: endWall ? `Corner with Wall ${endWall}` : 'Open end',
+  };
+}
+
+function formatSize(widthM, heightM) {
+  if (state.unit === 'mm') {
+    return `${Math.round(units.metersToMm(widthM))} × ${Math.round(units.metersToMm(heightM))} mm`;
+  }
+  return `${units.formatLength(widthM, state.unit)} × ${units.formatLength(heightM, state.unit)}`;
+}
+
+function openWallPanel(id) {
+  const idx = state.walls.findIndex((w) => w.id === id);
+  if (idx < 0) return;
+  const wall = state.walls[idx];
+  ui.panelWallId = id;
+  els.wallPanelTitle.textContent = `Wall ${idx + 1} – ${units.formatLength(wall.lengthM, state.unit)}`;
+  buildLengthInput(els.wallCeilingInputs, state.unit, 'wallCeil', 'Same as room');
+  setLength(state.unit, 'wallCeil', wall.ceilingHeightM || null);
+  const corners = cornerLabels(idx);
+  els.cornerToggle.querySelector('[data-corner="start"]').textContent = corners.start;
+  els.cornerToggle.querySelector('[data-corner="end"]').textContent = corners.end;
+  hideOpeningForm();
+  renderOpeningList();
+  els.wallPanel.classList.remove('hidden');
+  render();
+}
+
+function closeWallPanel() {
+  ui.panelWallId = null;
+  hideOpeningForm();
+  els.wallPanel.classList.add('hidden');
+}
+
+function renderOpeningList() {
+  const wall = panelWall();
+  els.openingList.innerHTML = '';
+  if (!wall) return;
+  const openings = wall.openings || [];
+  if (openings.length === 0) {
+    const li = document.createElement('li');
+    li.className = 'empty-note';
+    li.textContent = 'No openings on this wall.';
+    els.openingList.appendChild(li);
+    return;
+  }
+  const tags = op.openingTags(state.walls);
+  const corners = cornerLabels(state.walls.indexOf(wall));
+  openings.forEach((o) => {
+    const li = document.createElement('li');
+    li.className = 'wall-row';
+    const corner = o.fromCorner === 'end' ? corners.end : corners.start;
+    const from = corner.charAt(0).toLowerCase() + corner.slice(1);
+    const sill = o.type === 'window' || o.sillM ? ` · sill ${units.formatLength(o.sillM || 0, state.unit)}` : '';
+    const warn = op.fitsOnWall(wall, o) ? '' : ' <span class="warn-text">⚠ runs past end of wall</span>';
+    li.innerHTML = `
+      <div class="wall-idx">${tags[o.id]}</div>
+      <div class="wall-info">
+        <div class="wall-len">${op.OPENING_TYPES[o.type].label} ${formatSize(o.widthM, o.heightM)}</div>
+        <div class="wall-dir">${units.formatLength(o.offsetM, state.unit)} from ${from}${sill}</div>
+        <div class="wall-dir">${op.MEASURED_TO[o.measuredTo]}${o.note ? ' · ' + escapeHtml(o.note) : ''}${warn}</div>
+      </div>
+      <button class="edit-btn" data-op-id="${o.id}" title="Edit">&#9998;</button>
+      <button class="delete-btn" data-op-id="${o.id}" title="Delete">&#128465;</button>
+    `;
+    els.openingList.appendChild(li);
+  });
+}
+
+function setOpeningType(type) {
+  ui.openingType = type;
+  [...els.openingTypeButtons.children].forEach((btn) => {
+    btn.classList.toggle('selected', btn.dataset.type === type);
+  });
+  els.sillSection.classList.toggle('hidden', !(type === 'window' || type === 'other'));
+}
+
+function setOpeningCorner(corner) {
+  ui.openingCorner = corner;
+  [...els.cornerToggle.children].forEach((btn) => {
+    btn.classList.toggle('selected', btn.dataset.corner === corner);
+  });
+}
+
+function showOpeningForm(opening) {
+  ui.editingOpeningId = opening ? opening.id : null;
+  els.openingFormTitle.textContent = opening ? 'Edit opening' : 'New opening';
+  buildLengthInput($('#offsetInputs'), state.unit, 'opOff', state.unit === 'mm' ? 'e.g. 0' : undefined);
+  buildLengthInput($('#widthInputs'), state.unit, 'opW');
+  buildLengthInput($('#heightInputs'), state.unit, 'opH');
+  buildLengthInput($('#sillInputs'), state.unit, 'opSill');
+  setOpeningType(opening ? opening.type : 'door');
+  setOpeningCorner(opening ? opening.fromCorner : 'start');
+  let lastMeasuredTo = 'plaster';
+  try {
+    lastMeasuredTo = localStorage.getItem(MEASURED_TO_KEY) || 'plaster';
+  } catch {}
+  els.measuredToSelect.value = opening ? opening.measuredTo : lastMeasuredTo;
+  if (opening) {
+    setLength(state.unit, 'opOff', opening.offsetM);
+    setLength(state.unit, 'opW', opening.widthM);
+    setLength(state.unit, 'opH', opening.heightM);
+    setLength(state.unit, 'opSill', opening.sillM || null);
+  }
+  els.openingNote.value = opening ? opening.note || '' : '';
+  els.openingError.classList.add('hidden');
+  els.openingForm.classList.remove('hidden');
+  els.addOpeningBtn.classList.add('hidden');
+  els.openingForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function hideOpeningForm() {
+  ui.editingOpeningId = null;
+  els.openingForm.classList.add('hidden');
+  els.addOpeningBtn.classList.remove('hidden');
+}
+
+function showOpeningError(message) {
+  els.openingError.textContent = message;
+  els.openingError.classList.remove('hidden');
+}
+
+function handleSaveOpening() {
+  const wall = panelWall();
+  if (!wall) return;
+  const offsetM = readLength(state.unit, 'opOff', { allowZero: true });
+  const widthM = readLength(state.unit, 'opW');
+  const heightM = readLength(state.unit, 'opH');
+  const hasSill = ui.openingType === 'window' || ui.openingType === 'other';
+  const sillM = hasSill ? readLength(state.unit, 'opSill', { allowZero: true }) || 0 : 0;
+  if (offsetM == null) return showOpeningError('Enter the distance from the corner (0 if it starts at the corner).');
+  if (widthM == null) return showOpeningError('Enter the opening width.');
+  if (heightM == null) return showOpeningError('Enter the opening height.');
+
+  const opening = {
+    id: ui.editingOpeningId || uid().replace(/^w_/, 'o_'),
+    type: ui.openingType,
+    measuredTo: els.measuredToSelect.value,
+    fromCorner: ui.openingCorner,
+    offsetM,
+    widthM,
+    heightM,
+    sillM,
+    note: els.openingNote.value.trim(),
+  };
+
+  if (!op.fitsOnWall(wall, opening)) {
+    const available = Math.max(wall.lengthM - offsetM, 0);
+    return showOpeningError(
+      `Doesn't fit: the wall is ${units.formatLength(wall.lengthM, state.unit)}, so only ` +
+      `${units.formatLength(available, state.unit)} is left past that distance.`
+    );
+  }
+  const clash = op.overlappingOpening(wall, opening);
+  if (clash) {
+    return showOpeningError(`Overlaps ${op.openingTags(state.walls)[clash.id]} on this wall.`);
+  }
+
+  wall.openings = wall.openings || [];
+  const existing = wall.openings.findIndex((o) => o.id === opening.id);
+  if (existing >= 0) wall.openings[existing] = opening;
+  else wall.openings.push(opening);
+  try {
+    localStorage.setItem(MEASURED_TO_KEY, opening.measuredTo);
+  } catch {}
+
+  hideOpeningForm();
+  persist();
+  renderOpeningList();
+  render();
+}
+
+async function handleDeleteOpening(id) {
+  const wall = panelWall();
+  if (!wall) return;
+  const tag = op.openingTags(state.walls)[id];
+  const ok = await showConfirm(`Delete opening ${tag}?`);
+  if (!ok) return;
+  wall.openings = (wall.openings || []).filter((o) => o.id !== id);
+  if (ui.editingOpeningId === id) hideOpeningForm();
+  persist();
+  renderOpeningList();
+  render();
+}
+
 // ---------- event wiring ----------
 
 els.jobName.addEventListener('change', () => {
@@ -473,6 +675,8 @@ els.jobName.addEventListener('change', () => {
 els.unitSelect.addEventListener('change', () => {
   state.unit = els.unitSelect.value;
   buildLengthInputs();
+  buildCeilingInput();
+  if (ui.panelWallId) openWallPanel(ui.panelWallId);
   persist();
   render();
 });
@@ -515,8 +719,10 @@ els.saveJobBtn.addEventListener('click', handleSaveJob);
 els.wallList.addEventListener('click', (e) => {
   const editBtn = e.target.closest('.edit-btn');
   const delBtn = e.target.closest('.delete-btn');
+  const info = e.target.closest('.wall-info');
   if (editBtn) handleEditWall(editBtn.dataset.id);
-  if (delBtn) handleDeleteWall(delBtn.dataset.id);
+  else if (delBtn) handleDeleteWall(delBtn.dataset.id);
+  else if (info) openWallPanel(info.dataset.id);
 });
 
 els.jobsBtn.addEventListener('click', () => {
@@ -530,6 +736,64 @@ els.jobsPanel.addEventListener('click', (e) => {
   const delBtn = e.target.closest('.delete-btn');
   if (loadBtn) handleLoadJob(loadBtn.dataset.id);
   if (delBtn) handleDeleteJob(delBtn.dataset.id);
+});
+
+els.ceilingInputs.addEventListener('input', () => {
+  state.ceilingHeightM = readLength(state.unit, 'ceil');
+  renderStats();
+});
+els.ceilingInputs.addEventListener('change', persist);
+
+els.planSvg.addEventListener('click', (e) => {
+  const hit = e.target.closest('[data-wall-id]');
+  if (hit) openWallPanel(hit.dataset.wallId);
+});
+
+els.closeWallPanelBtn.addEventListener('click', () => {
+  closeWallPanel();
+  render();
+});
+els.wallPanel.addEventListener('click', (e) => {
+  if (e.target === els.wallPanel) {
+    closeWallPanel();
+    render();
+  }
+});
+
+els.wallCeilingInputs.addEventListener('input', () => {
+  const wall = panelWall();
+  if (!wall) return;
+  const h = readLength(state.unit, 'wallCeil');
+  if (h) wall.ceilingHeightM = h;
+  else delete wall.ceilingHeightM;
+  renderStats();
+});
+els.wallCeilingInputs.addEventListener('change', () => {
+  persist();
+  render();
+});
+
+els.addOpeningBtn.addEventListener('click', () => showOpeningForm(null));
+els.cancelOpeningBtn.addEventListener('click', hideOpeningForm);
+els.openingTypeButtons.addEventListener('click', (e) => {
+  const btn = e.target.closest('.dir-btn');
+  if (btn) setOpeningType(btn.dataset.type);
+});
+els.cornerToggle.addEventListener('click', (e) => {
+  const btn = e.target.closest('.lr-btn');
+  if (btn) setOpeningCorner(btn.dataset.corner);
+});
+els.openingForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  handleSaveOpening();
+});
+els.openingList.addEventListener('click', (e) => {
+  const editBtn = e.target.closest('.edit-btn');
+  const delBtn = e.target.closest('.delete-btn');
+  const wall = panelWall();
+  if (!wall) return;
+  if (editBtn) showOpeningForm(wall.openings.find((o) => o.id === editBtn.dataset.opId));
+  if (delBtn) handleDeleteOpening(delBtn.dataset.opId);
 });
 
 // ---------- init ----------
@@ -548,11 +812,13 @@ function init() {
       state.jobId = job.id;
       state.jobName = job.name;
       state.unit = job.unit || 'mm';
+      state.ceilingHeightM = job.ceilingHeightM || null;
       state.walls = job.walls || [];
       buildLengthInputs();
     }
   }
 
+  buildCeilingInput();
   render();
 
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {

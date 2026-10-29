@@ -41,6 +41,11 @@
 
     <div id="statsBar" class="stats-bar"></div>
 
+    <section class="room-card">
+      <div class="field-label">Ceiling height (room)</div>
+      <div id="ceilingInputs" class="length-inputs"></div>
+    </section>
+
     <section id="entryCard" class="entry-card">
       <h2 id="entryTitle">Wall 1</h2>
 
@@ -106,6 +111,77 @@
         <button id="closeJobsBtn" class="icon-btn">&times;</button>
       </div>
       <ul id="jobsList" class="jobs-list"></ul>
+    </div>
+  </div>
+
+  <div id="wallPanel" class="jobs-panel hidden">
+    <div class="jobs-panel-inner wall-panel-inner">
+      <div class="jobs-panel-header">
+        <h2 id="wallPanelTitle">Wall</h2>
+        <button id="closeWallPanelBtn" class="icon-btn">&times;</button>
+      </div>
+
+      <div class="panel-section">
+        <div class="field-label">Ceiling height for this wall (blank = use room height)</div>
+        <div id="wallCeilingInputs" class="length-inputs"></div>
+      </div>
+
+      <div class="panel-section">
+        <div class="wall-list-header">
+          <h3>Openings</h3>
+        </div>
+        <ul id="openingList" class="wall-list"></ul>
+        <button id="addOpeningBtn" type="button" class="secondary-btn">+ Add Opening</button>
+      </div>
+
+      <form id="openingForm" class="panel-section opening-form hidden">
+        <h3 id="openingFormTitle">New opening</h3>
+
+        <div class="field-label">Type</div>
+        <div class="direction-buttons" id="openingTypeButtons">
+          <button type="button" class="dir-btn" data-type="door">Door</button>
+          <button type="button" class="dir-btn" data-type="window">Window</button>
+          <button type="button" class="dir-btn" data-type="opening">Opening</button>
+          <button type="button" class="dir-btn" data-type="other">Other</button>
+        </div>
+
+        <div class="field-label">Measured to</div>
+        <select id="measuredToSelect" class="panel-select">
+          <option value="plaster">Plaster to plaster</option>
+          <option value="structural">Structural opening</option>
+          <option value="frame">Inside frame</option>
+        </select>
+
+        <div class="field-label">Measure from</div>
+        <div class="lr-toggle" id="cornerToggle">
+          <button type="button" class="lr-btn" data-corner="start">Start corner</button>
+          <button type="button" class="lr-btn" data-corner="end">End corner</button>
+        </div>
+
+        <div class="field-label">Distance from corner to opening</div>
+        <div id="offsetInputs" class="length-inputs"></div>
+
+        <div class="field-label">Width</div>
+        <div id="widthInputs" class="length-inputs"></div>
+
+        <div class="field-label">Height</div>
+        <div id="heightInputs" class="length-inputs"></div>
+
+        <div id="sillSection">
+          <div class="field-label">Sill height (floor to bottom of window)</div>
+          <div id="sillInputs" class="length-inputs"></div>
+        </div>
+
+        <div class="field-label">Note (optional)</div>
+        <input id="openingNote" class="panel-text" type="text" placeholder="e.g. fire door, existing to be removed" />
+
+        <p id="openingError" class="error-text hidden"></p>
+
+        <div class="confirm-actions">
+          <button type="button" id="cancelOpeningBtn" class="secondary-btn">Cancel</button>
+          <button type="submit" id="saveOpeningBtn" class="primary-btn">Save Opening</button>
+        </div>
+      </form>
     </div>
   </div>
 

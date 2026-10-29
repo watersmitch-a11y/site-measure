@@ -1,5 +1,6 @@
 import { computePoints, boundingBox, closingGap } from './geometry.js';
 import { formatLength } from './units.js';
+import { openingSpan, openingTags } from './openings.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -9,8 +10,16 @@ function el(tag, attrs = {}) {
   return e;
 }
 
+// Keeps text upright: an angle along the wall, flipped by 180° if needed.
+function readableAngle(angle) {
+  let a = angle;
+  if (a > 90) a -= 180;
+  if (a <= -90) a += 180;
+  return a;
+}
+
 // Renders the wall chain into the given SVG container element.
-export function renderPlan(svg, walls, unit) {
+export function renderPlan(svg, walls, unit, { selectedWallId = null } = {}) {
   svg.innerHTML = '';
 
   if (walls.length === 0) {
@@ -39,28 +48,93 @@ export function renderPlan(svg, walls, unit) {
 
   const strokeWidth = Math.max(width, height) * 0.012;
   const fontSize = Math.max(width, height) * 0.045;
+  const tags = openingTags(walls);
 
   const group = el('g');
   svg.appendChild(group);
+  const hitGroup = el('g');
 
   // wall segments
   walls.forEach((w, i) => {
     const a = points[i];
     const b = points[i + 1];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len;
+    const uy = dy / len;
+    const nx = -uy;
+    const ny = ux;
+    const along = (m) => ({ x: a.x + ux * m, y: a.y + uy * m });
+
     const line = el('line', {
       x1: a.x,
       y1: a.y,
       x2: b.x,
       y2: b.y,
-      class: 'plan-wall',
+      class: 'plan-wall' + (w.id === selectedWallId ? ' selected' : ''),
       'stroke-width': strokeWidth,
     });
     group.appendChild(line);
 
+    const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+    const textAngle = readableAngle(angle);
+
+    // openings: cut a gap in the wall, then draw the symbol and tag
+    (w.openings || []).forEach((o) => {
+      const span = openingSpan(w, o);
+      const s = along(Math.max(span.startM, 0));
+      const e = along(Math.min(span.endM, w.lengthM));
+      group.appendChild(el('line', {
+        x1: s.x, y1: s.y, x2: e.x, y2: e.y,
+        class: 'plan-cut',
+        'stroke-width': strokeWidth * 1.6,
+      }));
+      const jamb = strokeWidth * 1.8;
+      [s, e].forEach((p) => {
+        group.appendChild(el('line', {
+          x1: p.x - nx * jamb, y1: p.y - ny * jamb,
+          x2: p.x + nx * jamb, y2: p.y + ny * jamb,
+          class: 'plan-opening',
+          'stroke-width': strokeWidth * 0.5,
+        }));
+      });
+      if (o.type === 'window') {
+        const off = strokeWidth * 0.45;
+        [-off, off].forEach((d) => {
+          group.appendChild(el('line', {
+            x1: s.x + nx * d, y1: s.y + ny * d, x2: e.x + nx * d, y2: e.y + ny * d,
+            class: 'plan-opening',
+            'stroke-width': strokeWidth * 0.3,
+          }));
+        });
+      } else if (o.type === 'door' || o.type === 'other') {
+        group.appendChild(el('line', {
+          x1: s.x, y1: s.y, x2: e.x, y2: e.y,
+          class: 'plan-opening' + (o.type === 'other' ? ' dotted' : ' dashed'),
+          'stroke-width': strokeWidth * 0.3,
+        }));
+      }
+      // tag on the opposite side of the wall to the length label
+      const mid = along((Math.max(span.startM, 0) + Math.min(span.endM, w.lengthM)) / 2);
+      const tx = mid.x - nx * fontSize * 0.8;
+      const ty = mid.y - ny * fontSize * 0.8;
+      const tag = el('text', {
+        x: tx,
+        y: ty,
+        'text-anchor': 'middle',
+        'dominant-baseline': 'central',
+        'font-size': fontSize * 0.75,
+        transform: `rotate(${textAngle}, ${tx}, ${ty})`,
+        class: 'plan-opening-label',
+      });
+      tag.textContent = `${tags[o.id]} ${formatLength(o.widthM, unit)}`;
+      group.appendChild(tag);
+    });
+
     // direction arrowhead at midpoint
     const mx = (a.x + b.x) / 2;
     const my = (a.y + b.y) / 2;
-    const angle = Math.atan2(b.y - a.y, b.x - a.x) * (180 / Math.PI);
     const arrow = el('path', {
       d: `M ${-fontSize * 0.35} ${-fontSize * 0.35} L ${fontSize * 0.35} 0 L ${-fontSize * 0.35} ${fontSize * 0.35} Z`,
       transform: `translate(${mx}, ${my}) rotate(${angle})`,
@@ -68,19 +142,10 @@ export function renderPlan(svg, walls, unit) {
     });
     group.appendChild(arrow);
 
-    // length label, offset perpendicular to the wall
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const len = Math.hypot(dx, dy) || 1;
-    const nx = -dy / len;
-    const ny = dx / len;
+    // length label, offset perpendicular to the wall and rotated to run along it
     const offset = fontSize * 0.9;
     const lx = mx + nx * offset;
     const ly = my + ny * offset;
-    // rotate the label to run along the wall, flipped so it never reads upside down
-    let textAngle = angle;
-    if (textAngle > 90) textAngle -= 180;
-    if (textAngle <= -90) textAngle += 180;
     const label = el('text', {
       x: lx,
       y: ly,
@@ -88,10 +153,21 @@ export function renderPlan(svg, walls, unit) {
       'dominant-baseline': 'central',
       'font-size': fontSize,
       transform: `rotate(${textAngle}, ${lx}, ${ly})`,
-      class: 'plan-label',
+      class: 'plan-label' + (w.id === selectedWallId ? ' selected' : ''),
     });
     label.textContent = `${i + 1}. ${formatLength(w.lengthM, unit)}`;
     group.appendChild(label);
+
+    // wide invisible line on top so walls are easy to tap
+    hitGroup.appendChild(el('line', {
+      x1: a.x,
+      y1: a.y,
+      x2: b.x,
+      y2: b.y,
+      class: 'plan-hit',
+      'stroke-width': Math.max(fontSize * 1.6, strokeWidth * 6),
+      'data-wall-id': w.id,
+    }));
   });
 
   // closing gap indicator (dashed) if shape isn't closed and has 3+ walls
@@ -140,4 +216,6 @@ export function renderPlan(svg, walls, unit) {
       class: 'plan-end',
     })
   );
+
+  svg.appendChild(hitGroup);
 }
