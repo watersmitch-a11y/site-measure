@@ -132,6 +132,7 @@ const els = {
   zoomOutBtn: $('#zoomOutBtn'),
   zoomFitBtn: $('#zoomFitBtn'),
   moveRoomBtn: $('#moveRoomBtn'),
+  panelMoveRoomBtn: $('#panelMoveRoomBtn'),
   moveBar: $('#moveBar'),
   moveTitle: $('#moveTitle'),
   nudgePad: $('#nudgePad'),
@@ -848,6 +849,8 @@ function openWallPanel(id) {
   const idx = state.walls.findIndex((w) => w.id === id);
   if (idx < 0) return;
   const wall = state.walls[idx];
+  els.panelMoveRoomBtn.textContent = `Move ${activeLabel()}`;
+  els.panelMoveRoomBtn.classList.toggle('hidden', !canMove(activeRoom()));
   ui.panelWallId = id;
   const roomPrefix = state.rooms.length > 1 ? `${activeLabel()} – ` : '';
   els.wallPanelTitle.textContent =
@@ -1664,10 +1667,35 @@ els.planSvg.addEventListener('click', (e) => {
     return;
   }
   const hit = nearestHitLine(e);
-  if (!hit) return;
+  if (!hit) {
+    // a tap inside a room, away from its walls, switches to that room
+    const pt = svgPoint(e);
+    const room = pt && roomAtPoint(pt);
+    if (room && room.id !== state.activeRoomId) setActiveRoom(room.id);
+    return;
+  }
   if (hit.dataset.roomId !== state.activeRoomId) setActiveRoom(hit.dataset.roomId);
   openWallPanel(hit.dataset.wallId);
 });
+
+// The room whose floor contains a plan point (the smallest, if rooms overlap).
+function roomAtPoint(pt) {
+  const geom = rm.roomGeometry(state.rooms);
+  let best = null;
+  state.rooms.forEach((room) => {
+    const pts = geom.get(room.id).points;
+    if (pts.length < 3) return;
+    let inside = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const a = pts[i];
+      const b = pts[j];
+      if ((a.y > pt.y) !== (b.y > pt.y) && pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+    }
+    const area = rm.polygonArea(pts);
+    if (inside && (!best || area < best.area)) best = { room, area };
+  });
+  return best && best.room;
+}
 
 els.closeWallPanelBtn.addEventListener('click', () => {
   closeWallPanel();
@@ -1763,6 +1791,7 @@ $('#thicknessInputs').addEventListener('input', () => {
 els.createRoomBtn.addEventListener('click', handleCreateRoom);
 
 els.moveRoomBtn.addEventListener('click', startMove);
+els.panelMoveRoomBtn.addEventListener('click', startMove); // startMove closes the wall panel
 els.doneMoveBtn.addEventListener('click', () => endMove(true));
 els.cancelMoveBtn.addEventListener('click', () => endMove(false));
 els.rotateLeftBtn.addEventListener('click', () => rotateMoving(-90));
