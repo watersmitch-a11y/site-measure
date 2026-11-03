@@ -423,24 +423,56 @@ export function wallMerges(rooms, geom, maxGap = 0.3) {
   return merges;
 }
 
-// When a room is dropped near another, how far to slide it so the nearest
-// facing wall sits exactly `thicknessM` off the other room's wall: { dx, dy }
-// or null if no wall is close enough.
+// When a room is dropped near another, how far to slide it so it lines up:
+// { dx, dy }, or null if nothing is close enough. Two snaps, at right angles
+// to each other, so corners square up:
+//  - across a shared wall: walls facing each other end up exactly
+//    `thicknessM` apart
+//  - along it: walls on the same side (a continuous front wall) end up in
+//    line, or the ends of the facing walls line up
+// Each only applies within `range` of where the room was dropped.
 export function snapOffset(rooms, geom, roomId, thicknessM, range = 0.35) {
   const moving = rooms.find((r) => r.id === roomId);
   const pm = geom.get(roomId).points;
-  let best = null;
+  const options = []; // { n: direction to move along, shift: metres }
   rooms.filter((r) => r !== moving).forEach((other) => {
     const po = geom.get(other.id).points;
     other.walls.forEach((wo, io) => {
-      const A = wallFrame(po, io);
+      const O = wallFrame(po, io);
+      if (O.len < 0.01) return;
       moving.walls.forEach((wm, im) => {
-        const ov = facingOverlap(A, wallFrame(pm, im), thicknessM - range, thicknessM + range);
-        if (!ov) return;
-        const shift = thicknessM - ov.gap;
-        if (!best || Math.abs(shift) < Math.abs(best.shift)) best = { shift, n: A.n };
+        const M = wallFrame(pm, im);
+        if (M.len < 0.01) return;
+        const facing = dot(M.n, O.n);
+        if (Math.abs(facing) < 0.999) return;
+        // where M sits along O, as an interval, and how far apart they are
+        const m0 = dot(sub(M.a, O.a), O.u);
+        const m1 = m0 + dot(M.u, O.u) * M.len;
+        const lo = Math.min(m0, m1);
+        const hi = Math.max(m0, m1);
+        const off = dot(sub(M.a, O.a), O.n);
+        if (facing < 0) {
+          const overlap = Math.min(hi, O.len) - Math.max(lo, 0);
+          if (overlap < 0.05) return;
+          if (Math.abs(thicknessM - off) <= range) options.push({ n: O.n, shift: thicknessM - off });
+          // line up the ends of the two facing walls
+          [[lo, 0], [lo, O.len], [hi, 0], [hi, O.len]].forEach(([mEnd, oEnd]) => {
+            if (Math.abs(oEnd - mEnd) <= range) options.push({ n: O.u, shift: oEnd - mEnd });
+          });
+        } else {
+          // same side: put the walls in line if they're near each other
+          const apart = Math.max(lo - O.len, 0 - hi, 0);
+          if (apart <= thicknessM + range && Math.abs(off) <= range) options.push({ n: O.n, shift: -off });
+        }
       });
     });
   });
-  return best && Math.abs(best.shift) > 0.0005 ? { dx: best.n.x * best.shift, dy: best.n.y * best.shift } : null;
+  if (!options.length) return null;
+  const smallest = (list) => list.reduce((b, o) => (Math.abs(o.shift) < Math.abs(b.shift) ? o : b));
+  const first = smallest(options);
+  const across = options.filter((o) => Math.abs(dot(o.n, first.n)) < 0.1);
+  const second = across.length ? smallest(across) : null;
+  const dx = first.n.x * first.shift + (second ? second.n.x * second.shift : 0);
+  const dy = first.n.y * first.shift + (second ? second.n.y * second.shift : 0);
+  return Math.hypot(dx, dy) > 0.0005 ? { dx, dy } : null;
 }
