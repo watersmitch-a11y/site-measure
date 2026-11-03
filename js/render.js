@@ -23,7 +23,10 @@ function readableAngle(angle) {
 // arrows, start/end markers); other rooms are drawn dimmed with their name.
 // For print, every room is dimensioned, with lengths inside each room so
 // shared walls don't put two labels in the same gap, and no arrows/markers.
-export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWallId = null, previewLine = null, print = false } = {}) {
+// viewBox ({ x, y, width, height }) holds the view still, e.g. while dragging.
+export function renderPlan(svg, rooms, unit, {
+  activeRoomId = null, selectedWallId = null, previewLine = null, print = false, viewBox = null,
+} = {}) {
   svg.innerHTML = '';
 
   const geom = roomGeometry(rooms);
@@ -46,10 +49,10 @@ export function renderPlan(svg, rooms, unit, { activeRoomId = null, selectedWall
 
   const box = boundingBox([...geom.values()].flatMap((g) => g.points));
   const padding = 1.2; // meters of padding around the drawing
-  const width = Math.max(box.maxX - box.minX, 0.5) + padding * 2;
-  const height = Math.max(box.maxY - box.minY, 0.5) + padding * 2;
-  const viewMinX = box.minX - padding;
-  const viewMinY = box.minY - padding;
+  const width = viewBox ? viewBox.width : Math.max(box.maxX - box.minX, 0.5) + padding * 2;
+  const height = viewBox ? viewBox.height : Math.max(box.maxY - box.minY, 0.5) + padding * 2;
+  const viewMinX = viewBox ? viewBox.x : box.minX - padding;
+  const viewMinY = viewBox ? viewBox.y : box.minY - padding;
 
   svg.setAttribute('viewBox', `${viewMinX} ${viewMinY} ${width} ${height}`);
 

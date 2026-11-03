@@ -43,6 +43,32 @@
       <button id="cancelPlaceBtn" type="button" class="text-btn">Cancel</button>
     </div>
 
+    <div id="moveBar" class="move-bar hidden">
+      <div class="move-title" id="moveTitle">Drag the room on the plan, or nudge it</div>
+      <div class="move-controls">
+        <div class="dir-pad nudge-pad" id="nudgePad">
+          <button type="button" class="pad-btn pad-left" data-dx="-1" data-dy="0" aria-label="Nudge left"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 L20 11 H15.5 V21.5 H8.5 V11 H4 Z"/></svg></button>
+          <button type="button" class="pad-btn pad-up" data-dx="0" data-dy="-1" aria-label="Nudge up"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 L20 11 H15.5 V21.5 H8.5 V11 H4 Z"/></svg></button>
+          <button type="button" class="pad-btn pad-down" data-dx="0" data-dy="1" aria-label="Nudge down"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 L20 11 H15.5 V21.5 H8.5 V11 H4 Z"/></svg></button>
+          <button type="button" class="pad-btn pad-right" data-dx="1" data-dy="0" aria-label="Nudge right"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 L20 11 H15.5 V21.5 H8.5 V11 H4 Z"/></svg></button>
+          <select id="nudgeStep" class="pad-btn pad-mid nudge-step" aria-label="Nudge step">
+            <option value="0.01">10 mm</option>
+            <option value="0.1" selected>100 mm</option>
+            <option value="1">1 m</option>
+          </select>
+        </div>
+      </div>
+      <div class="move-actions">
+        <button type="button" id="rotateLeftBtn" class="secondary-btn" aria-label="Rotate 90 degrees anticlockwise">&#10226; 90&deg;</button>
+        <button type="button" id="rotateRightBtn" class="secondary-btn" aria-label="Rotate 90 degrees clockwise">90&deg; &#10227;</button>
+        <button type="button" id="matchDoorBtn" class="secondary-btn">Line up a door</button>
+      </div>
+      <div class="move-actions">
+        <button type="button" id="cancelMoveBtn" class="secondary-btn">Cancel</button>
+        <button type="button" id="doneMoveBtn" class="primary-btn">Done</button>
+      </div>
+    </div>
+
     <div class="plan-wrap">
       <svg id="planSvg" class="plan-svg" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet"></svg>
     </div>
@@ -104,6 +130,7 @@
     <section class="room-card">
       <div class="room-card-row">
         <input id="roomName" class="room-name-input" type="text" aria-label="Room name" />
+        <button id="moveRoomBtn" type="button" class="text-btn hidden">Move room</button>
         <button id="deleteRoomBtn" type="button" class="text-btn danger-text hidden">Delete room</button>
       </div>
       <div id="roomAnchorNote" class="anchor-note hidden"></div>
@@ -232,6 +259,27 @@
       <div class="confirm-actions panel-section">
         <button type="button" id="cancelRoomBtn" class="secondary-btn">Cancel</button>
         <button type="button" id="createRoomBtn" class="primary-btn">Create Room</button>
+      </div>
+    </div>
+  </div>
+
+<div id="doorMatchPanel" class="jobs-panel hidden">
+    <div class="jobs-panel-inner">
+      <div class="jobs-panel-header">
+        <h2>Line Up a Door</h2>
+        <button id="closeDoorMatchBtn" class="icon-btn">&times;</button>
+      </div>
+      <p class="hint-text">Pick the same doorway as measured in each room. This room turns so the two walls face each other and slides so the doorways line up.</p>
+      <div class="field-label">Door in this room</div>
+      <select id="doorHereSelect" class="panel-select"></select>
+      <div class="field-label">Same door in the other room</div>
+      <select id="doorThereSelect" class="panel-select"></select>
+      <div class="field-label">Wall thickness between them</div>
+      <div id="doorThicknessInputs" class="length-inputs"></div>
+      <p id="doorMatchError" class="error-text hidden"></p>
+      <div class="confirm-actions panel-section">
+        <button type="button" id="cancelDoorMatchBtn" class="secondary-btn">Cancel</button>
+        <button type="button" id="applyDoorMatchBtn" class="primary-btn">Line Up</button>
       </div>
     </div>
   </div>

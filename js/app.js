@@ -64,6 +64,7 @@ const ui = {
   placingRoom: false, // waiting for a tap on the plan to start a new room
   placement: null, // the shared wall tapped, while the new-room sheet is open
   placementEdited: false, // start/length typed over, so thickness changes leave them
+  moving: null, // { roomId, before, drag, viewBox } while a room is being moved
 };
 
 const MEASURED_TO_KEY = 'siteMeasure.lastMeasuredTo';
@@ -123,6 +124,23 @@ const els = {
   closeRoomPanelBtn: $('#closeRoomPanelBtn'),
   sharedStartLabel: $('#sharedStartLabel'),
   exportBtn: $('#exportBtn'),
+  moveRoomBtn: $('#moveRoomBtn'),
+  moveBar: $('#moveBar'),
+  moveTitle: $('#moveTitle'),
+  nudgePad: $('#nudgePad'),
+  nudgeStep: $('#nudgeStep'),
+  rotateLeftBtn: $('#rotateLeftBtn'),
+  rotateRightBtn: $('#rotateRightBtn'),
+  matchDoorBtn: $('#matchDoorBtn'),
+  cancelMoveBtn: $('#cancelMoveBtn'),
+  doneMoveBtn: $('#doneMoveBtn'),
+  doorMatchPanel: $('#doorMatchPanel'),
+  closeDoorMatchBtn: $('#closeDoorMatchBtn'),
+  doorHereSelect: $('#doorHereSelect'),
+  doorThereSelect: $('#doorThereSelect'),
+  doorMatchError: $('#doorMatchError'),
+  cancelDoorMatchBtn: $('#cancelDoorMatchBtn'),
+  applyDoorMatchBtn: $('#applyDoorMatchBtn'),
   placeBanner: $('#placeBanner'),
   cancelPlaceBtn: $('#cancelPlaceBtn'),
   placeSummary: $('#placeSummary'),
@@ -353,6 +371,7 @@ function render() {
     activeRoomId: state.activeRoomId,
     selectedWallId: ui.panelWallId,
     previewLine: previewLine(),
+    viewBox: ui.moving && ui.moving.viewBox,
   });
   renderStats();
   renderWallList();
@@ -617,6 +636,7 @@ function handleClosePolygon() {
 }
 
 async function handleNewJob() {
+  if (ui.moving) endMove(true);
   if (allWalls().length > 0) {
     const ok = await showConfirm('Start a new job? Current job is already auto-saved.');
     if (!ok) return;
@@ -659,6 +679,7 @@ function handleSaveJob() {
 }
 
 function handleLoadJob(id) {
+  if (ui.moving) endMove(true);
   const job = store.loadJob(id);
   if (!job) return;
   applyJob(job);
@@ -999,6 +1020,7 @@ function renderRoomCard() {
   if (document.activeElement !== els.roomName) els.roomName.value = room.name || '';
   els.roomName.placeholder = `Room ${roomIndex(room) + 1}`;
   els.deleteRoomBtn.classList.toggle('hidden', state.rooms.length < 2);
+  els.moveRoomBtn.classList.toggle('hidden', !canMove(room) || !!ui.moving);
   const anchorText = anchorDescription(room);
   els.roomAnchorNote.textContent = anchorText;
   els.roomAnchorNote.classList.toggle('hidden', !anchorText);
@@ -1006,11 +1028,177 @@ function renderRoomCard() {
 
 function setActiveRoom(id) {
   if (!state.rooms.some((r) => r.id === id)) return;
+  if (ui.moving) endMove(true);
   state.activeRoomId = id;
   closeWallPanel();
   resetEntryForm();
   buildCeilingInput();
   persist();
+  render();
+}
+
+// ---------- moving a room ----------
+// Rooms that aren't attached to another room's wall can be dragged, nudged
+// and turned, or lined up with another room by a doorway measured in both.
+
+function canMove(room) {
+  return room.walls.length > 0 && (!room.anchor || room.anchor.type === 'fixed');
+}
+
+function startMove() {
+  const room = activeRoom();
+  if (!canMove(room)) return;
+  closeWallPanel();
+  ui.moving = { roomId: room.id, before: JSON.stringify({ anchor: room.anchor, first: room.walls[0].angle }) };
+  if (!room.anchor) room.anchor = { type: 'fixed', x: 0, y: 0, heading: null };
+  els.moveTitle.textContent = `Moving ${activeLabel()}: drag it on the plan, or nudge it`;
+  els.moveBar.classList.remove('hidden');
+  els.planWrap.classList.add('moving');
+  render();
+  els.moveBar.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function endMove(keep) {
+  const moving = ui.moving;
+  if (!moving) return;
+  const room = state.rooms.find((r) => r.id === moving.roomId);
+  if (room && !keep) {
+    const before = JSON.parse(moving.before);
+    room.anchor = before.anchor;
+    if (room.walls[0]) room.walls[0].angle = before.first;
+  }
+  ui.moving = null;
+  els.moveBar.classList.add('hidden');
+  els.planWrap.classList.remove('placing', 'moving');
+  els.doorMatchPanel.classList.add('hidden');
+  persist();
+  render();
+}
+
+function movingRoom() {
+  return ui.moving && state.rooms.find((r) => r.id === ui.moving.roomId);
+}
+
+const round3 = (v) => Math.round(v * 1000) / 1000; // to the millimetre
+
+function shiftRoom(room, dx, dy) {
+  room.anchor.x = round3(room.anchor.x + dx);
+  room.anchor.y = round3(room.anchor.y + dy);
+}
+
+// Turn a room by deg (clockwise on the plan) about its start point.
+function turnRoom(room, deg) {
+  const norm = (a) => ((a % 360) + 360) % 360;
+  if (room.anchor.heading != null) room.anchor.heading = norm(room.anchor.heading + deg);
+  else room.walls[0].angle = norm(room.walls[0].angle + deg);
+}
+
+function roomCentre(room) {
+  const pts = geometryOf(room).points;
+  return {
+    x: pts.reduce((sum, p) => sum + p.x, 0) / pts.length,
+    y: pts.reduce((sum, p) => sum + p.y, 0) / pts.length,
+  };
+}
+
+// The rotate buttons turn the room about its middle so it stays in view.
+function rotateMoving(deg) {
+  const room = movingRoom();
+  if (!room) return;
+  const before = roomCentre(room);
+  turnRoom(room, deg);
+  const after = roomCentre(room);
+  shiftRoom(room, before.x - after.x, before.y - after.y);
+  render();
+}
+
+// Doorways (doors and plain openings) on a room's walls.
+function doorwaysOf(room) {
+  const tags = op.openingTags(allWalls());
+  return room.walls.flatMap((wall, wallIdx) => (wall.openings || [])
+    .filter((o) => o.type === 'door' || o.type === 'opening')
+    .map((o) => ({ room, wall, wallIdx, opening: o, tag: tags[o.id] })));
+}
+
+function doorwayLabel(d, withRoom) {
+  const where = `${roomSide(d.wallIdx, d.room)} wall`;
+  const room = withRoom ? `${rm.roomLabel(d.room, roomIndex(d.room))} · ` : '';
+  return `${room}${d.tag} ${op.OPENING_TYPES[d.opening.type].label.toLowerCase()} ` +
+    `${units.formatLength(d.opening.widthM, state.unit)}, ${where}`;
+}
+
+function openDoorMatch() {
+  const room = movingRoom();
+  if (!room) return;
+  const here = doorwaysOf(room);
+  const there = state.rooms.filter((r) => r !== room).flatMap(doorwaysOf);
+  const fill = (select, list, withRoom) => {
+    select.innerHTML = '';
+    list.forEach((d) => {
+      const opt = document.createElement('option');
+      opt.value = d.opening.id;
+      opt.textContent = doorwayLabel(d, withRoom);
+      select.appendChild(opt);
+    });
+  };
+  fill(els.doorHereSelect, here, false);
+  fill(els.doorThereSelect, there, true);
+  buildLengthInput($('#doorThicknessInputs'), state.unit, 'doorThick');
+  setLength(state.unit, 'doorThick', rm.DEFAULT_WALL_THICKNESS_M);
+  const missing = !here.length
+    ? `Add the doorway to ${activeLabel()} first (tap the wall it's in).`
+    : !there.length ? 'Add the doorway to the other room first, as measured from that side.' : '';
+  els.doorMatchError.textContent = missing;
+  els.doorMatchError.classList.toggle('hidden', !missing);
+  els.applyDoorMatchBtn.disabled = !!missing;
+  els.doorMatchPanel.classList.remove('hidden');
+}
+
+function findDoorway(openingId) {
+  return state.rooms.flatMap(doorwaysOf).find((d) => d.opening.id === openingId) || null;
+}
+
+// Outward normal of a room's wall, and the middle of a doorway in it.
+function outwardNormal(room, wallIdx) {
+  const pts = geometryOf(room).points;
+  const dx = pts[wallIdx + 1].x - pts[wallIdx].x;
+  const dy = pts[wallIdx + 1].y - pts[wallIdx].y;
+  const len = Math.hypot(dx, dy) || 1;
+  const out = -rm.insideSign(pts);
+  return { x: (-dy / len) * out, y: (dx / len) * out };
+}
+
+function doorwayCentre(d) {
+  const pts = geometryOf(d.room).points;
+  const a = pts[d.wallIdx];
+  const b = pts[d.wallIdx + 1];
+  const span = op.openingSpan(d.wall, d.opening);
+  const t = (span.startM + span.endM) / 2 / (d.wall.lengthM || 1);
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+function handleDoorMatch() {
+  const room = movingRoom();
+  const here = findDoorway(els.doorHereSelect.value);
+  const there = findDoorway(els.doorThereSelect.value);
+  const thick = readLength(state.unit, 'doorThick', { allowZero: true });
+  if (!room || !here || !there) return;
+  if (thick == null) {
+    els.doorMatchError.textContent = 'Enter the wall thickness.';
+    els.doorMatchError.classList.remove('hidden');
+    return;
+  }
+  // 1. turn this room so its wall faces the other room's wall
+  const headingOf = (v) => (Math.atan2(v.x, -v.y) * 180) / Math.PI;
+  const nHere = outwardNormal(here.room, here.wallIdx);
+  const nThere = outwardNormal(there.room, there.wallIdx);
+  const turn = normalizeAngle180(headingOf({ x: -nThere.x, y: -nThere.y }) - headingOf(nHere));
+  if (Math.abs(turn) > 0.01) turnRoom(room, Math.round(turn * 100) / 100);
+  // 2. slide it so the doorways line up, the wall thickness apart
+  const from = doorwayCentre(findDoorway(here.opening.id));
+  const to = doorwayCentre(there);
+  shiftRoom(room, to.x + nThere.x * thick - from.x, to.y + nThere.y * thick - from.y);
+  els.doorMatchPanel.classList.add('hidden');
   render();
 }
 
@@ -1310,7 +1498,35 @@ function nearestHitLine(e) {
   return best;
 }
 
+// dragging a room while it's being moved; the view is held still meanwhile
+els.planSvg.addEventListener('pointerdown', (e) => {
+  const room = movingRoom();
+  if (!room) return;
+  const vb = els.planSvg.viewBox.baseVal;
+  ui.moving.viewBox = { x: vb.x, y: vb.y, width: vb.width, height: vb.height };
+  ui.moving.drag = { start: svgPoint(e), x: room.anchor.x, y: room.anchor.y };
+  els.planSvg.setPointerCapture(e.pointerId);
+});
+els.planSvg.addEventListener('pointermove', (e) => {
+  const room = movingRoom();
+  const drag = ui.moving && ui.moving.drag;
+  if (!room || !drag || !drag.start) return;
+  const pt = svgPoint(e);
+  room.anchor.x = round3(drag.x + pt.x - drag.start.x);
+  room.anchor.y = round3(drag.y + pt.y - drag.start.y);
+  render();
+});
+const endDrag = () => {
+  if (!ui.moving || !ui.moving.drag) return;
+  ui.moving.drag = null;
+  ui.moving.viewBox = null;
+  render();
+};
+els.planSvg.addEventListener('pointerup', endDrag);
+els.planSvg.addEventListener('pointercancel', endDrag);
+
 els.planSvg.addEventListener('click', (e) => {
+  if (ui.moving) return;
   if (ui.placingRoom) {
     handlePlacementTap(e);
     return;
@@ -1416,6 +1632,27 @@ $('#thicknessInputs').addEventListener('input', () => {
   });
 });
 els.createRoomBtn.addEventListener('click', handleCreateRoom);
+
+els.moveRoomBtn.addEventListener('click', startMove);
+els.doneMoveBtn.addEventListener('click', () => endMove(true));
+els.cancelMoveBtn.addEventListener('click', () => endMove(false));
+els.rotateLeftBtn.addEventListener('click', () => rotateMoving(-90));
+els.rotateRightBtn.addEventListener('click', () => rotateMoving(90));
+els.nudgePad.addEventListener('click', (e) => {
+  const btn = e.target.closest('button.pad-btn');
+  const room = movingRoom();
+  if (!btn || !room) return;
+  const step = Number(els.nudgeStep.value);
+  shiftRoom(room, Number(btn.dataset.dx) * step, Number(btn.dataset.dy) * step);
+  render();
+});
+els.matchDoorBtn.addEventListener('click', openDoorMatch);
+els.applyDoorMatchBtn.addEventListener('click', handleDoorMatch);
+els.closeDoorMatchBtn.addEventListener('click', () => els.doorMatchPanel.classList.add('hidden'));
+els.cancelDoorMatchBtn.addEventListener('click', () => els.doorMatchPanel.classList.add('hidden'));
+els.doorMatchPanel.addEventListener('click', (e) => {
+  if (e.target === els.doorMatchPanel) els.doorMatchPanel.classList.add('hidden');
+});
 
 // ---------- init ----------
 

@@ -612,3 +612,23 @@ main {
 .match-chips:empty { display: none; }
 .chip.match { color: var(--accent); border-color: var(--accent-dim); padding: 0.45rem 0.8rem; font-size: 0.85rem; }
 .chip.match.selected { background: var(--accent-dim); border-color: var(--accent); }
+
+/* ---------- moving a room ---------- */
+.move-bar {
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.move-bar.hidden { display: none; }
+.move-title { font-size: 0.85rem; color: var(--text); }
+.nudge-step { color: var(--text); font-size: 0.85rem; text-align: center; padding: 0 0.2rem; }
+.move-actions { display: flex; gap: 0.4rem; }
+.move-actions .secondary-btn,
+.move-actions .primary-btn { margin-top: 0; min-height: 44px; padding: 0.5rem; font-size: 0.9rem; flex: 1; }
+.plan-wrap.moving { border-color: var(--accent); }
+.plan-wrap.moving .plan-svg { touch-action: none; }
+#doorMatchPanel .field-label { margin-top: 0.75rem; }
