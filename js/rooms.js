@@ -339,3 +339,108 @@ export function migrateSharedWallRooms(rooms) {
     if (room.walls[0]) room.walls[0].angle = (((hostHeading + room.walls[0].angle) % 360) + 360) % 360;
   });
 }
+
+// ---------- walls that rooms share once they're placed side by side ----------
+// Rooms measured separately each have their own walls. Where a wall of one
+// room and a wall of another face each other a wall-thickness apart (parallel,
+// back to back, up to maxGap), the overlapping part is one physical wall: it
+// is drawn once (by the earlier room, the "owner"), and doorways measured from
+// both sides are drawn once. Only the overlapping part merges; the rest of
+// each wall stays its own. Measurements are untouched, so moving a room apart
+// again un-merges it.
+
+function wallFrame(points, idx) {
+  const a = points[idx];
+  const b = points[idx + 1];
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  const u = { x: (b.x - a.x) / (len || 1), y: (b.y - a.y) / (len || 1) };
+  const out = -insideSign(points);
+  return { a, len, u, n: { x: -u.y * out, y: u.x * out } }; // n: outward normal
+}
+
+const dot = (p, q) => p.x * q.x + p.y * q.y;
+const sub = (p, q) => ({ x: p.x - q.x, y: p.y - q.y });
+
+// Wall A (owner) and wall B facing each other: the gap between them and the
+// overlap, as [s, e] along each wall from its start; or null.
+function facingOverlap(A, B, minGap, maxGap) {
+  if (A.len < 0.01 || B.len < 0.01 || dot(A.n, B.n) > -0.999) return null;
+  const gap = dot(sub(B.a, A.a), A.n);
+  if (gap < minGap || gap > maxGap) return null;
+  const t0 = dot(sub(B.a, A.a), A.u);
+  const t1 = t0 + dot(B.u, A.u) * B.len;
+  const s = Math.max(Math.min(t0, t1), 0);
+  const e = Math.min(Math.max(t0, t1), A.len);
+  if (e - s < 0.05) return null;
+  // the same stretch along B
+  const onB = (t) => dot(sub({ x: A.a.x + A.u.x * t, y: A.a.y + A.u.y * t }, B.a), B.u);
+  const bs = onB(s);
+  const be = onB(e);
+  return { gap, a: [s, e], b: [Math.min(bs, be), Math.max(bs, be)], toA: (m) => t0 + dot(B.u, A.u) * m };
+}
+
+// Merged walls for drawing:
+//   hidden:  'roomId|wallIdx' -> [[s, e], …]  stretches not drawn (the owner draws them)
+//   shared:  'roomId|wallIdx' -> [{ s, e, otherRoomId }]  owner stretches shared with another room
+//   extras:  'roomId|wallIdx' -> [{ opening, startM, endM, fromRoomId }]  the other room's
+//            openings in a shared stretch, along the owner wall (only ones the owner lacks)
+//   sameAs:  opening id -> { roomId, openingId }  a doorway the owner already has
+export function wallMerges(rooms, geom, maxGap = 0.3) {
+  const merges = { hidden: new Map(), shared: new Map(), extras: new Map(), sameAs: new Map() };
+  const push = (map, key, item) => {
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(item);
+  };
+  rooms.forEach((ra, i) => {
+    const pa = geom.get(ra.id).points;
+    rooms.slice(i + 1).forEach((rb) => {
+      const pb = geom.get(rb.id).points;
+      ra.walls.forEach((wa, ia) => {
+        const A = wallFrame(pa, ia);
+        rb.walls.forEach((wb, ib) => {
+          const ov = facingOverlap(A, wallFrame(pb, ib), -0.02, maxGap);
+          if (!ov) return;
+          const keyA = `${ra.id}|${ia}`;
+          push(merges.hidden, `${rb.id}|${ib}`, ov.b);
+          push(merges.shared, keyA, { s: ov.a[0], e: ov.a[1], otherRoomId: rb.id });
+          (wb.openings || []).forEach((o) => {
+            const span = openingSpan(wb, o);
+            const mid = (span.startM + span.endM) / 2;
+            if (mid < ov.b[0] || mid > ov.b[1]) return;
+            const ends = [ov.toA(span.startM), ov.toA(span.endM)].sort((x, y) => x - y);
+            const twin = (wa.openings || []).find((oa) => {
+              const sa = openingSpan(wa, oa);
+              const overlap = Math.min(sa.endM, ends[1]) - Math.max(sa.startM, ends[0]);
+              return overlap > 0.5 * Math.min(oa.widthM, o.widthM);
+            });
+            if (twin) merges.sameAs.set(o.id, { roomId: ra.id, openingId: twin.id });
+            else push(merges.extras, keyA, { opening: o, startM: ends[0], endM: ends[1], fromRoomId: rb.id });
+          });
+        });
+      });
+    });
+  });
+  return merges;
+}
+
+// When a room is dropped near another, how far to slide it so the nearest
+// facing wall sits exactly `thicknessM` off the other room's wall: { dx, dy }
+// or null if no wall is close enough.
+export function snapOffset(rooms, geom, roomId, thicknessM, range = 0.35) {
+  const moving = rooms.find((r) => r.id === roomId);
+  const pm = geom.get(roomId).points;
+  let best = null;
+  rooms.filter((r) => r !== moving).forEach((other) => {
+    const po = geom.get(other.id).points;
+    other.walls.forEach((wo, io) => {
+      const A = wallFrame(po, io);
+      moving.walls.forEach((wm, im) => {
+        const ov = facingOverlap(A, wallFrame(pm, im), thicknessM - range, thicknessM + range);
+        if (!ov) return;
+        const shift = thicknessM - ov.gap;
+        if (!best || Math.abs(shift) < Math.abs(best.shift)) best = { shift, n: A.n };
+      });
+    });
+  });
+  return best && Math.abs(best.shift) > 0.0005 ? { dx: best.n.x * best.shift, dy: best.n.y * best.shift } : null;
+}

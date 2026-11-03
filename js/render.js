@@ -1,7 +1,7 @@
 import { boundingBox } from './geometry.js';
 import { formatLength, formatArea } from './units.js';
 import { openingSpan, openingTags } from './openings.js';
-import { roomGeometry, closingGap, polygonArea, insideSign as roomInsideSign, roomLabel } from './rooms.js';
+import { roomGeometry, closingGap, polygonArea, insideSign as roomInsideSign, roomLabel, wallMerges } from './rooms.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -74,10 +74,14 @@ export function renderPlan(svg, rooms, unit, {
   const tags = openingTags(rooms.flatMap((r) => r.walls));
 
   const hitGroup = el('g');
-  const ctx = { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup, print };
+  // shared stretches and doorways of the room being worked on, drawn undimmed on top
+  const brightGroup = el('g', { class: 'plan-room active' });
+  const merges = wallMerges(rooms, geom);
+  const ctx = { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup, print, merges, brightGroup, activeRoomId };
 
   if (print) {
     rooms.forEach((r, i) => drawRoom(svg, r, i, geom.get(r.id), true, ctx));
+    svg.appendChild(brightGroup);
     return;
   }
 
@@ -91,6 +95,7 @@ export function renderPlan(svg, rooms, unit, {
   if (activeRoom) {
     drawRoom(svg, activeRoom, rooms.indexOf(activeRoom), geom.get(activeRoom.id), true, ctx);
   }
+  svg.appendChild(brightGroup);
 
   // the shared wall a new room will get, while it's being placed
   if (previewLine) {
@@ -114,7 +119,7 @@ export function renderPlan(svg, rooms, unit, {
 // g: the room's geometry from roomGeometry ({ points, target })
 function drawRoom(svg, room, roomIndex, g, active, ctx) {
   const { points, target } = g;
-  const { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup, print } = ctx;
+  const { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup, print, merges, brightGroup, activeRoomId } = ctx;
   const walls = room.walls;
   const group = el('g', { class: active ? 'plan-room active' : 'plan-room dim' });
   svg.appendChild(group);
@@ -136,34 +141,49 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
     const ny = ux;
     const along = (m) => ({ x: a.x + ux * m, y: a.y + uy * m });
 
-    const line = el('line', {
-      x1: a.x,
-      y1: a.y,
-      x2: b.x,
-      y2: b.y,
-      class: 'plan-wall' + (active && w.id === selectedWallId ? ' selected' : ''),
-      'stroke-width': strokeWidth,
+    const key = `${room.id}|${i}`;
+    const hidden = merges.hidden.get(key) || [];
+    // shared stretches drawn bright when the other room is the one being worked on
+    const brightRanges = active || print
+      ? []
+      : (merges.shared.get(key) || []).filter((sh) => sh.otherRoomId === activeRoomId).map((sh) => [sh.s, sh.e]);
+    const inRanges = (m, ranges) => ranges.some(([rs, re]) => m >= rs - 0.001 && m <= re + 0.001);
+    const groupAt = (m) => (inRanges(m, brightRanges) ? brightGroup : group);
+
+    // the wall line, less any stretch another room draws for both
+    const wallClass = 'plan-wall' + (active && w.id === selectedWallId ? ' selected' : '');
+    const drawStretch = (target, from, to) => {
+      const p = along(from);
+      const q = along(to);
+      target.appendChild(el('line', { x1: p.x, y1: p.y, x2: q.x, y2: q.y, class: wallClass, 'stroke-width': strokeWidth }));
+    };
+    let cursor = 0;
+    [...hidden].sort((x, y) => x[0] - y[0]).forEach(([hs, he]) => {
+      if (hs > cursor + 0.001) drawStretch(group, cursor, hs);
+      cursor = Math.max(cursor, he);
     });
-    group.appendChild(line);
+    if (cursor < len - 0.001) drawStretch(group, cursor, len);
+    brightRanges.forEach(([bs, be]) => drawStretch(brightGroup, bs, be));
 
     const angle = Math.atan2(dy, dx) * (180 / Math.PI);
     const textAngle = readableAngle(angle);
 
-    // openings: cut a gap in the wall, then draw the symbol and tag
-    (w.openings || []).forEach((o) => {
+    // Cut a gap in the wall for an opening and draw its symbol and tag. side
+    // is the inside of the room the opening was measured from: this room, or
+    // for another room's doorway drawn on this shared wall, the far side.
+    const drawOpening = (target, o, span, side) => {
       let tagPos = null;
       let tagText = `${tags[o.id]} ${formatLength(o.widthM, unit)}`;
-      const span = openingSpan(w, o);
       const s = along(Math.max(span.startM, 0));
       const e = along(Math.min(span.endM, w.lengthM));
-      group.appendChild(el('line', {
+      target.appendChild(el('line', {
         x1: s.x, y1: s.y, x2: e.x, y2: e.y,
         class: 'plan-cut',
         'stroke-width': strokeWidth * 1.6,
       }));
       const jamb = strokeWidth * 1.8;
       [s, e].forEach((p) => {
-        group.appendChild(el('line', {
+        target.appendChild(el('line', {
           x1: p.x - nx * jamb, y1: p.y - ny * jamb,
           x2: p.x + nx * jamb, y2: p.y + ny * jamb,
           class: 'plan-opening',
@@ -173,7 +193,7 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
       if (o.type === 'window') {
         const off = strokeWidth * 0.45;
         [-off, off].forEach((d) => {
-          group.appendChild(el('line', {
+          target.appendChild(el('line', {
             x1: s.x + nx * d, y1: s.y + ny * d, x2: e.x + nx * d, y2: e.y + ny * d,
             class: 'plan-opening',
             'stroke-width': strokeWidth * 0.3,
@@ -181,8 +201,8 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
         });
       } else if (o.type === 'door') {
         // leaf from the hinge jamb plus a quarter-circle swing to the other jamb
-        const inX = nx * insideSign;
-        const inY = ny * insideSign;
+        const inX = nx * side;
+        const inY = ny * side;
         const swingX = o.swing === 'out' ? -inX : inX;
         const swingY = o.swing === 'out' ? -inY : inY;
         // "left" as seen standing in the room facing the door
@@ -195,12 +215,12 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
         const r = Math.hypot(latch.x - hinge.x, latch.y - hinge.y);
         const tip = { x: hinge.x + swingX * r, y: hinge.y + swingY * r };
         const cross = (tip.x - hinge.x) * (latch.y - hinge.y) - (tip.y - hinge.y) * (latch.x - hinge.x);
-        group.appendChild(el('line', {
+        target.appendChild(el('line', {
           x1: hinge.x, y1: hinge.y, x2: tip.x, y2: tip.y,
           class: 'plan-opening',
           'stroke-width': strokeWidth * 0.45,
         }));
-        group.appendChild(el('path', {
+        target.appendChild(el('path', {
           d: `M ${tip.x} ${tip.y} A ${r} ${r} 0 0 ${cross > 0 ? 1 : 0} ${latch.x} ${latch.y}`,
           class: 'plan-opening plan-swing',
           'stroke-width': strokeWidth * 0.3,
@@ -212,7 +232,7 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
         };
         tagText = tags[o.id];
       } else if (o.type === 'other') {
-        group.appendChild(el('line', {
+        target.appendChild(el('line', {
           x1: s.x, y1: s.y, x2: e.x, y2: e.y,
           class: 'plan-opening dotted',
           'stroke-width': strokeWidth * 0.3,
@@ -222,8 +242,8 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
       if (!tagPos) {
         const mid = along((Math.max(span.startM, 0) + Math.min(span.endM, w.lengthM)) / 2);
         tagPos = {
-          x: mid.x + nx * insideSign * fontSize * 0.8,
-          y: mid.y + ny * insideSign * fontSize * 0.8,
+          x: mid.x + nx * side * fontSize * 0.8,
+          y: mid.y + ny * side * fontSize * 0.8,
         };
       }
       const { x: tx, y: ty } = tagPos;
@@ -237,7 +257,20 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
         class: 'plan-opening-label',
       });
       tag.textContent = tagText;
-      group.appendChild(tag);
+      target.appendChild(tag);
+    };
+
+    // this wall's own openings, unless they sit in a stretch another room draws
+    (w.openings || []).forEach((o) => {
+      const span = openingSpan(w, o);
+      const mid = (span.startM + span.endM) / 2;
+      if (inRanges(mid, hidden)) return;
+      drawOpening(groupAt(mid), o, span, insideSign);
+    });
+    // doorways the other room has in a shared stretch that this room doesn't
+    (merges.extras.get(key) || []).forEach((x) => {
+      const target = !active && !print && x.fromRoomId === activeRoomId ? brightGroup : group;
+      drawOpening(target, x.opening, { startM: x.startM, endM: x.endM }, -insideSign);
     });
 
     if (active) {

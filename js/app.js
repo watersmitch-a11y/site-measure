@@ -1639,10 +1639,15 @@ els.planSvg.addEventListener('pointermove', (e) => {
   room.anchor.y = round3(drag.y + pt.y - drag.start.y);
   render();
 });
+// Dropping a dragged room with a wall close to another room's wall snaps it
+// to exactly a wall thickness apart, so the shared wall and doors merge.
 const endDrag = () => {
   if (!ui.moving || !ui.moving.drag) return;
   ui.moving.drag = null;
   ui.moving.viewBox = null;
+  const room = movingRoom();
+  const snap = room && rm.snapOffset(state.rooms, rm.roomGeometry(state.rooms), room.id, rm.DEFAULT_WALL_THICKNESS_M);
+  if (snap) shiftRoom(room, snap.dx, snap.dy);
   render();
 };
 els.planSvg.addEventListener('pointerup', endDrag);

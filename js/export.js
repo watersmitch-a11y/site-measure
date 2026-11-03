@@ -26,6 +26,8 @@ export function exportPlan(job, { planEnds }) {
   const fmt = (m) => units.formatLength(m, unit);
   const area = (m2) => units.formatArea(m2, unit);
   const geom = rm.roomGeometry(rooms);
+  const merges = rm.wallMerges(rooms, geom);
+  const tagOwner = new Map(rooms.flatMap((r) => r.walls.flatMap((w) => (w.openings || []).map((o) => [o.id, r]))));
   const tags = op.openingTags(rooms.flatMap((r) => r.walls));
   const measured = rooms.filter((r) => rm.roomArea(r, geom.get(r.id)) != null);
   const totalArea = measured.reduce((sum, r) => sum + rm.roomArea(r, geom.get(r.id)), 0);
@@ -62,6 +64,11 @@ export function exportPlan(job, { planEnds }) {
       const details = [];
       if (o.type === 'window' || o.sillM) details.push(`Sill ${fmt(o.sillM || 0)}`);
       if (o.type === 'door') details.push(`Hinge ${o.hinge === 'right' ? 'right' : 'left'}, opens ${o.swing === 'out' ? 'out' : 'in'}`);
+      const same = merges.sameAs.get(o.id);
+      if (same) {
+        const owner = tagOwner.get(same.openingId);
+        details.push(`Same doorway as ${rm.roomLabel(owner, rooms.indexOf(owner))} ${tags[same.openingId]}`);
+      }
       if (o.note) details.push(o.note);
       return `<tr><td>${tags[o.id]}</td><td>${op.OPENING_TYPES[o.type].label}</td>` +
         `<td>${fmt(o.widthM)} × ${fmt(o.heightM)}</td><td>Wall ${i + 1}, ${fmt(o.offsetM)} from ${from}</td>` +
