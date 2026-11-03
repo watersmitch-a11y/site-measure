@@ -632,3 +632,27 @@ main {
 .plan-wrap.moving { border-color: var(--accent); }
 .plan-wrap.moving .plan-svg { touch-action: none; }
 #doorMatchPanel .field-label { margin-top: 0.75rem; }
+
+/* ---------- zoom ---------- */
+.plan-wrap { position: relative; }
+.plan-svg { touch-action: pan-y; }
+.plan-wrap.zoomed .plan-svg { touch-action: none; }
+.zoom-controls {
+  position: absolute;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  display: flex;
+  gap: 0.35rem;
+}
+.zoom-btn {
+  min-width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 1.25rem;
+  opacity: 0.9;
+}
+.zoom-btn.zoom-fit { font-size: 0.8rem; padding: 0 0.6rem; color: var(--accent); }
+.zoom-btn.hidden { display: none; }

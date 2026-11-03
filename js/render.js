@@ -19,6 +19,20 @@ function readableAngle(angle) {
   return a;
 }
 
+// The view that fits every room, with some padding, in plan metres.
+export function fitViewBox(rooms) {
+  const points = [...roomGeometry(rooms).values()].flatMap((g) => g.points);
+  if (points.length < 2) return { x: 0, y: 0, width: 10, height: 10 };
+  const box = boundingBox(points);
+  const padding = 1.2;
+  return {
+    x: box.minX - padding,
+    y: box.minY - padding,
+    width: Math.max(box.maxX - box.minX, 0.5) + padding * 2,
+    height: Math.max(box.maxY - box.minY, 0.5) + padding * 2,
+  };
+}
+
 // Renders every room of the job. The active room gets full detail (lengths,
 // arrows, start/end markers); other rooms are drawn dimmed with their name.
 // For print, every room is dimensioned, with lengths inside each room so
@@ -47,12 +61,10 @@ export function renderPlan(svg, rooms, unit, {
     return;
   }
 
-  const box = boundingBox([...geom.values()].flatMap((g) => g.points));
-  const padding = 1.2; // meters of padding around the drawing
-  const width = viewBox ? viewBox.width : Math.max(box.maxX - box.minX, 0.5) + padding * 2;
-  const height = viewBox ? viewBox.height : Math.max(box.maxY - box.minY, 0.5) + padding * 2;
-  const viewMinX = viewBox ? viewBox.x : box.minX - padding;
-  const viewMinY = viewBox ? viewBox.y : box.minY - padding;
+  const view = viewBox || fitViewBox(rooms);
+  const { width, height } = view;
+  const viewMinX = view.x;
+  const viewMinY = view.y;
 
   svg.setAttribute('viewBox', `${viewMinX} ${viewMinY} ${width} ${height}`);
 

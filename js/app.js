@@ -1,7 +1,7 @@
 import * as geo from './geometry.js';
 import * as units from './units.js';
 import * as store from './storage.js';
-import { renderPlan } from './render.js';
+import { renderPlan, fitViewBox } from './render.js';
 import { buildLengthInput, readLength, setLength } from './length-input.js';
 import * as op from './openings.js';
 import * as rm from './rooms.js';
@@ -65,6 +65,10 @@ const ui = {
   placement: null, // the shared wall tapped, while the new-room sheet is open
   placementEdited: false, // start/length typed over, so thickness changes leave them
   moving: null, // { roomId, before, drag, viewBox } while a room is being moved
+  view: null, // zoomed-in view { x, y, w } (a square, in plan metres); null = whole plan
+  pinch: null, // two-finger zoom in progress
+  pan: null, // one-finger pan of a zoomed plan in progress
+  suppressClick: false, // a pinch or pan just ended, so the tap that follows isn't a wall tap
 };
 
 const MEASURED_TO_KEY = 'siteMeasure.lastMeasuredTo';
@@ -124,6 +128,9 @@ const els = {
   closeRoomPanelBtn: $('#closeRoomPanelBtn'),
   sharedStartLabel: $('#sharedStartLabel'),
   exportBtn: $('#exportBtn'),
+  zoomInBtn: $('#zoomInBtn'),
+  zoomOutBtn: $('#zoomOutBtn'),
+  zoomFitBtn: $('#zoomFitBtn'),
   moveRoomBtn: $('#moveRoomBtn'),
   moveBar: $('#moveBar'),
   moveTitle: $('#moveTitle'),
@@ -367,15 +374,59 @@ function render() {
 
   renderRoomTabs();
   renderRoomCard();
+  drawPlan();
+  renderStats();
+  renderWallList();
+  els.closePolygonBtn.classList.toggle('hidden', state.walls.length < rm.minWallsToClose(activeRoom()));
+}
+
+// ---------- plan view and zoom ----------
+
+function drawPlan() {
+  let viewBox = ui.moving && ui.moving.viewBox;
+  if (!viewBox && ui.view) viewBox = { x: ui.view.x, y: ui.view.y, width: ui.view.w, height: ui.view.w };
   renderPlan(els.planSvg, state.rooms, state.unit, {
     activeRoomId: state.activeRoomId,
     selectedWallId: ui.panelWallId,
     previewLine: previewLine(),
-    viewBox: ui.moving && ui.moving.viewBox,
+    viewBox,
   });
-  renderStats();
-  renderWallList();
-  els.closePolygonBtn.classList.toggle('hidden', state.walls.length < rm.minWallsToClose(activeRoom()));
+  els.planWrap.classList.toggle('zoomed', !!ui.view);
+  els.zoomFitBtn.classList.toggle('hidden', !ui.view);
+}
+
+// The square of the plan currently on screen (the plan box is square, and the
+// whole-plan view is centred in it), so a screen fraction maps straight to it.
+function shownView() {
+  if (ui.view) return { ...ui.view };
+  const fit = fitViewBox(state.rooms);
+  const w = Math.max(fit.width, fit.height);
+  return { x: fit.x - (w - fit.width) / 2, y: fit.y - (w - fit.height) / 2, w };
+}
+
+function clampViewWidth(w) {
+  const fit = fitViewBox(state.rooms);
+  return Math.min(Math.max(w, 0.5), Math.max(fit.width, fit.height) * 1.5);
+}
+
+// Zoom by `factor` keeping the plan point at screen fraction (fx, fy) still.
+function zoomAt(fx, fy, factor) {
+  const v = shownView();
+  const px = v.x + fx * v.w;
+  const py = v.y + fy * v.w;
+  const w = clampViewWidth(v.w / factor);
+  ui.view = { x: px - fx * w, y: py - fy * w, w };
+  drawPlan();
+}
+
+function zoomFit() {
+  ui.view = null;
+  drawPlan();
+}
+
+function planFraction(clientX, clientY) {
+  const r = els.planSvg.getBoundingClientRect();
+  return { fx: (clientX - r.left) / r.width, fy: (clientY - r.top) / r.height, r };
 }
 
 function renderEntryTitle() {
@@ -637,6 +688,7 @@ function handleClosePolygon() {
 
 async function handleNewJob() {
   if (ui.moving) endMove(true);
+  ui.view = null;
   if (allWalls().length > 0) {
     const ok = await showConfirm('Start a new job? Current job is already auto-saved.');
     if (!ok) return;
@@ -680,6 +732,7 @@ function handleSaveJob() {
 
 function handleLoadJob(id) {
   if (ui.moving) endMove(true);
+  ui.view = null;
   const job = store.loadJob(id);
   if (!job) return;
   applyJob(job);
@@ -1498,6 +1551,75 @@ function nearestHitLine(e) {
   return best;
 }
 
+// Two fingers pinch-zoom the plan; once zoomed in, one finger pans it (unless
+// a room is being moved, when one finger drags the room). Not zoomed, one
+// finger scrolls the page as usual.
+const touchDist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+const touchMid = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+
+els.planSvg.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 2) {
+    e.preventDefault();
+    const view = shownView();
+    const mid = touchMid(e.touches);
+    const { fx, fy } = planFraction(mid.x, mid.y);
+    ui.pinch = { dist: touchDist(e.touches), view, point: { x: view.x + fx * view.w, y: view.y + fy * view.w } };
+    ui.pan = null;
+    if (ui.moving) ui.moving.drag = null;
+  } else if (e.touches.length === 1 && ui.view && !ui.moving) {
+    const t = e.touches[0];
+    ui.pan = { x: t.clientX, y: t.clientY, view: { ...ui.view }, moved: false };
+  }
+}, { passive: false });
+
+els.planSvg.addEventListener('touchmove', (e) => {
+  if (ui.pinch && e.touches.length === 2) {
+    e.preventDefault();
+    const w = clampViewWidth(ui.pinch.view.w * (ui.pinch.dist / Math.max(touchDist(e.touches), 1)));
+    const mid = touchMid(e.touches);
+    const { fx, fy } = planFraction(mid.x, mid.y);
+    ui.view = { x: ui.pinch.point.x - fx * w, y: ui.pinch.point.y - fy * w, w };
+    drawPlan();
+  } else if (ui.pan && e.touches.length === 1) {
+    e.preventDefault();
+    const t = e.touches[0];
+    const { r } = planFraction(t.clientX, t.clientY);
+    const perPx = ui.pan.view.w / r.width;
+    ui.view = {
+      x: ui.pan.view.x - (t.clientX - ui.pan.x) * perPx,
+      y: ui.pan.view.y - (t.clientY - ui.pan.y) * perPx,
+      w: ui.pan.view.w,
+    };
+    if (Math.hypot(t.clientX - ui.pan.x, t.clientY - ui.pan.y) > 8) ui.pan.moved = true;
+    drawPlan();
+  }
+}, { passive: false });
+
+els.planSvg.addEventListener('touchend', (e) => {
+  if (ui.pinch && e.touches.length < 2) {
+    ui.pinch = null;
+    ui.suppressClick = true;
+    if (ui.moving) ui.moving.viewBox = null;
+  }
+  if (ui.pan && e.touches.length === 0) {
+    if (ui.pan.moved) ui.suppressClick = true;
+    ui.pan = null;
+  }
+  // a click only follows straight away; don't let a stale flag eat a later tap
+  setTimeout(() => { ui.suppressClick = false; }, 400);
+});
+
+// mouse wheel / trackpad zoom on a computer
+els.planSvg.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const { fx, fy } = planFraction(e.clientX, e.clientY);
+  zoomAt(fx, fy, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+}, { passive: false });
+
+els.zoomInBtn.addEventListener('click', () => zoomAt(0.5, 0.5, 1.5));
+els.zoomOutBtn.addEventListener('click', () => zoomAt(0.5, 0.5, 1 / 1.5));
+els.zoomFitBtn.addEventListener('click', zoomFit);
+
 // dragging a room while it's being moved; the view is held still meanwhile
 els.planSvg.addEventListener('pointerdown', (e) => {
   const room = movingRoom();
@@ -1508,6 +1630,7 @@ els.planSvg.addEventListener('pointerdown', (e) => {
   els.planSvg.setPointerCapture(e.pointerId);
 });
 els.planSvg.addEventListener('pointermove', (e) => {
+  if (ui.pinch) return;
   const room = movingRoom();
   const drag = ui.moving && ui.moving.drag;
   if (!room || !drag || !drag.start) return;
@@ -1526,6 +1649,10 @@ els.planSvg.addEventListener('pointerup', endDrag);
 els.planSvg.addEventListener('pointercancel', endDrag);
 
 els.planSvg.addEventListener('click', (e) => {
+  if (ui.suppressClick) {
+    ui.suppressClick = false;
+    return;
+  }
   if (ui.moving) return;
   if (ui.placingRoom) {
     handlePlacementTap(e);
@@ -1604,10 +1731,7 @@ els.roomName.addEventListener('input', () => {
   activeRoom().name = els.roomName.value.trim();
   renderRoomTabs();
   renderEntryTitle();
-  renderPlan(els.planSvg, state.rooms, state.unit, {
-    activeRoomId: state.activeRoomId,
-    selectedWallId: ui.panelWallId,
-  });
+  drawPlan();
 });
 els.roomName.addEventListener('change', persist);
 els.deleteRoomBtn.addEventListener('click', handleDeleteRoom);
