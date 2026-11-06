@@ -385,11 +385,8 @@ function facingOverlap(A, B, minGap, maxGap) {
 //   extras:  'roomId|wallIdx' -> [{ opening, startM, endM, fromRoomId }]  the other room's
 //            openings in a shared stretch, along the owner wall (only ones the owner lacks)
 //   sameAs:  opening id -> { roomId, openingId }  a doorway the owner already has
-//   joins:   roomId -> [{ x1, y1, x2, y2 }]  short lines across the wall thickness
-//            from a corner of a hidden wall to the owner's wall line, so the
-//            rooms' walls meet the shared wall instead of stopping short of it
 export function wallMerges(rooms, geom, maxGap = 0.3) {
-  const merges = { hidden: new Map(), shared: new Map(), extras: new Map(), sameAs: new Map(), joins: new Map() };
+  const merges = { hidden: new Map(), shared: new Map(), extras: new Map(), sameAs: new Map() };
   const push = (map, key, item) => {
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(item);
@@ -406,11 +403,6 @@ export function wallMerges(rooms, geom, maxGap = 0.3) {
           if (!ov) return;
           const keyA = `${ra.id}|${ia}`;
           push(merges.hidden, `${rb.id}|${ib}`, ov.b);
-          [[ov.b[0] < 0.01, pb[ib]], [ov.b[1] > B.len - 0.01, pb[ib + 1]]].forEach(([atCorner, p]) => {
-            if (atCorner && ov.gap > 0.005) {
-              push(merges.joins, rb.id, { x1: p.x, y1: p.y, x2: p.x - A.n.x * ov.gap, y2: p.y - A.n.y * ov.gap });
-            }
-          });
           push(merges.shared, keyA, { s: ov.a[0], e: ov.a[1], otherRoomId: rb.id });
           (wb.openings || []).forEach((o) => {
             const span = openingSpan(wb, o);

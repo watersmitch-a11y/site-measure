@@ -676,3 +676,11 @@ main {
 .move-dims .field-label { margin-top: 0.4rem; }
 #moveDimsNone { margin: 0; }
 #moveDimsNone.hidden { display: none; }
+
+/* ---------- walls drawn to scale ---------- */
+/* a hairline outline in the same colour closes anti-aliasing seams between bands */
+.plan-band { fill: var(--text); stroke: var(--text); stroke-width: 0.006; stroke-linejoin: miter; }
+.plan-band.selected { fill: var(--accent); stroke: var(--accent); }
+.plan-cut-fill { fill: var(--surface); }
+.print-view .plan-band { fill: #111; stroke: #111; }
+.print-view .plan-cut-fill { fill: #fff; }

@@ -1,7 +1,13 @@
 import { boundingBox } from './geometry.js';
 import { formatLength, formatArea } from './units.js';
 import { openingSpan, openingTags } from './openings.js';
-import { roomGeometry, closingGap, polygonArea, insideSign as roomInsideSign, roomLabel, wallMerges } from './rooms.js';
+import {
+  roomGeometry, closingGap, polygonArea, insideSign as roomInsideSign, roomLabel, wallMerges, DEFAULT_WALL_THICKNESS_M,
+} from './rooms.js';
+
+// Walls are drawn to scale as bands this thick, outside the measured
+// (plaster) line, so rooms placed a wall apart share one solid wall.
+const WALL_T = DEFAULT_WALL_THICKNESS_M;
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -129,6 +135,37 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
   // i.e. along (nx, ny) below.
   const insideSign = roomInsideSign(points);
 
+  // Outer corners of the wall bands, mitred where two walls meet.
+  const n = walls.length;
+  const unitOf = (j) => {
+    const p = points[j];
+    const q = points[j + 1];
+    const l = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+    return { x: (q.x - p.x) / l, y: (q.y - p.y) / l };
+  };
+  const outOf = (u) => ({ x: u.y * insideSign, y: -u.x * insideSign }); // outward normal
+  const loop = n > 1 && Math.hypot(points[0].x - points[n].x, points[0].y - points[n].y) < 0.01;
+  const outerCorner = (j) => {
+    const before = j > 0 ? j - 1 : loop ? n - 1 : null;
+    const after = j < n ? j : loop ? 0 : null;
+    const p = points[j];
+    const plain = (k) => { const o = outOf(unitOf(k)); return { x: p.x + o.x * WALL_T, y: p.y + o.y * WALL_T }; };
+    if (before === null) return plain(after);
+    if (after === null) return plain(before);
+    const u1 = unitOf(before);
+    const u2 = unitOf(after);
+    const o1 = outOf(u1);
+    const o2 = outOf(u2);
+    const P = { x: p.x + o1.x * WALL_T, y: p.y + o1.y * WALL_T };
+    const Q = { x: p.x + o2.x * WALL_T, y: p.y + o2.y * WALL_T };
+    const cross = u1.x * u2.y - u1.y * u2.x;
+    if (Math.abs(cross) < 1e-6) return Q;
+    const t = ((Q.x - P.x) * u2.y - (Q.y - P.y) * u2.x) / cross;
+    const m = { x: P.x + u1.x * t, y: P.y + u1.y * t };
+    return Math.hypot(m.x - p.x, m.y - p.y) > WALL_T * 4 ? Q : m; // very sharp corners: no long spike
+  };
+  const corners = points.map((_, j) => outerCorner(j));
+
   walls.forEach((w, i) => {
     const a = points[i];
     const b = points[i + 1];
@@ -140,6 +177,9 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
     const nx = -uy;
     const ny = ux;
     const along = (m) => ({ x: a.x + ux * m, y: a.y + uy * m });
+    const ox = nx * -insideSign; // outward normal
+    const oy = ny * -insideSign;
+    const outward = (p, d = WALL_T) => ({ x: p.x + ox * d, y: p.y + oy * d });
 
     const key = `${room.id}|${i}`;
     const hidden = merges.hidden.get(key) || [];
@@ -150,12 +190,15 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
     const inRanges = (m, ranges) => ranges.some(([rs, re]) => m >= rs - 0.001 && m <= re + 0.001);
     const groupAt = (m) => (inRanges(m, brightRanges) ? brightGroup : group);
 
-    // the wall line, less any stretch another room draws for both
-    const wallClass = 'plan-wall' + (active && w.id === selectedWallId ? ' selected' : '');
+    // the wall band, less any stretch another room draws for both
+    const wallClass = 'plan-band' + (active && w.id === selectedWallId ? ' selected' : '');
     const drawStretch = (target, from, to) => {
       const p = along(from);
       const q = along(to);
-      target.appendChild(el('line', { x1: p.x, y1: p.y, x2: q.x, y2: q.y, class: wallClass, 'stroke-width': strokeWidth }));
+      const pOut = from < 0.001 ? corners[i] : outward(p);
+      const qOut = to > len - 0.001 ? corners[i + 1] : outward(q);
+      const pts = [p, q, qOut, pOut].map((v) => `${v.x},${v.y}`).join(' ');
+      target.appendChild(el('polygon', { points: pts, class: wallClass }));
     };
     let cursor = 0;
     [...hidden].sort((x, y) => x[0] - y[0]).forEach(([hs, he]) => {
@@ -174,27 +217,30 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
     const drawOpening = (target, o, span, side) => {
       let tagPos = null;
       let tagText = `${tags[o.id]} ${formatLength(o.widthM, unit)}`;
-      const s = along(Math.max(span.startM, 0));
-      const e = along(Math.min(span.endM, w.lengthM));
-      target.appendChild(el('line', {
-        x1: s.x, y1: s.y, x2: e.x, y2: e.y,
-        class: 'plan-cut',
-        'stroke-width': strokeWidth * 1.6,
-      }));
-      const jamb = strokeWidth * 1.8;
-      [s, e].forEach((p) => {
+      const s0 = along(Math.max(span.startM, 0));
+      const e0 = along(Math.min(span.endM, w.lengthM));
+      // cut the opening right through the wall band, a hair wider than it
+      const edge = (p, d) => outward(p, d);
+      const cut = [edge(s0, -0.01), edge(e0, -0.01), edge(e0, WALL_T + 0.01), edge(s0, WALL_T + 0.01)];
+      target.appendChild(el('polygon', { points: cut.map((v) => `${v.x},${v.y}`).join(' '), class: 'plan-cut-fill' }));
+      [s0, e0].forEach((p) => {
+        const q = outward(p);
         target.appendChild(el('line', {
-          x1: p.x - nx * jamb, y1: p.y - ny * jamb,
-          x2: p.x + nx * jamb, y2: p.y + ny * jamb,
+          x1: p.x, y1: p.y, x2: q.x, y2: q.y,
           class: 'plan-opening',
-          'stroke-width': strokeWidth * 0.5,
+          'stroke-width': strokeWidth * 0.4,
         }));
       });
+      // the face of the band on the measuring room's side, where its symbols sit
+      const towardsRoom = nx * side * ox + ny * side * oy > 0; // that room is beyond this wall
+      const s = towardsRoom ? outward(s0) : s0;
+      const e = towardsRoom ? outward(e0) : e0;
       if (o.type === 'window') {
-        const off = strokeWidth * 0.45;
-        [-off, off].forEach((d) => {
+        [WALL_T / 3, (WALL_T * 2) / 3].forEach((d) => {
+          const p = outward(s0, d);
+          const q = outward(e0, d);
           target.appendChild(el('line', {
-            x1: s.x + nx * d, y1: s.y + ny * d, x2: e.x + nx * d, y2: e.y + ny * d,
+            x1: p.x, y1: p.y, x2: q.x, y2: q.y,
             class: 'plan-opening',
             'stroke-width': strokeWidth * 0.3,
           }));
@@ -208,10 +254,13 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
         // "left" as seen standing in the room facing the door
         const leftX = -inY;
         const leftY = inX;
-        const sIsLeft = (s.x - e.x) * leftX + (s.y - e.y) * leftY > 0;
+        const sIsLeft = (s0.x - e0.x) * leftX + (s0.y - e0.y) * leftY > 0;
         const hingeLeft = o.hinge !== 'right';
-        const hinge = sIsLeft === hingeLeft ? s : e;
-        const latch = hinge === s ? e : s;
+        // hinged on the face the door swings towards
+        const swingsOut = swingX * ox + swingY * oy > 0;
+        const [fs, fe] = swingsOut ? [outward(s0), outward(e0)] : [s0, e0];
+        const hinge = sIsLeft === hingeLeft ? fs : fe;
+        const latch = hinge === fs ? fe : fs;
         const r = Math.hypot(latch.x - hinge.x, latch.y - hinge.y);
         const tip = { x: hinge.x + swingX * r, y: hinge.y + swingY * r };
         const cross = (tip.x - hinge.x) * (latch.y - hinge.y) - (tip.y - hinge.y) * (latch.x - hinge.x);
@@ -232,15 +281,17 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
         };
         tagText = tags[o.id];
       } else if (o.type === 'other') {
+        const p = outward(s0, WALL_T / 2);
+        const q = outward(e0, WALL_T / 2);
         target.appendChild(el('line', {
-          x1: s.x, y1: s.y, x2: e.x, y2: e.y,
+          x1: p.x, y1: p.y, x2: q.x, y2: q.y,
           class: 'plan-opening dotted',
           'stroke-width': strokeWidth * 0.3,
         }));
       }
-      // other openings are tagged inside the room; wall lengths go outside
+      // other openings are tagged inside the measuring room; wall lengths go outside
       if (!tagPos) {
-        const mid = along((Math.max(span.startM, 0) + Math.min(span.endM, w.lengthM)) / 2);
+        const mid = { x: (s.x + e.x) / 2, y: (s.y + e.y) / 2 };
         tagPos = {
           x: mid.x + nx * side * fontSize * 0.8,
           y: mid.y + ny * side * fontSize * 0.8,
@@ -308,7 +359,8 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
         labelAt = (best.from + best.to) / 2;
       }
       const labelBase = along(labelAt);
-      const offset = fontSize * 0.9 * labelSide;
+      // outside: clear of the wall band too
+      const offset = (fontSize * 0.9 + (print ? 0 : WALL_T)) * labelSide;
       const lx = labelBase.x + nx * offset;
       const ly = labelBase.y + ny * offset;
       const label = el('text', {
@@ -380,11 +432,6 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
       group.appendChild(sub);
     }
   }
-
-  // close this room's corners across the wall thickness to a shared wall
-  (merges.joins.get(room.id) || []).forEach((j) => {
-    group.appendChild(el('line', { ...j, class: 'plan-wall', 'stroke-width': strokeWidth }));
-  });
 
   if (!active || print) return;
 
