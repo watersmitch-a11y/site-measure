@@ -671,3 +671,8 @@ main {
 .calc-preview { flex-basis: 100%; font-size: 0.85rem; color: var(--accent); min-height: 0; }
 .calc-preview:empty { display: none; }
 .calc-preview.bad { color: var(--red); }
+
+.move-dims.hidden { display: none; }
+.move-dims .field-label { margin-top: 0.4rem; }
+#moveDimsNone { margin: 0; }
+#moveDimsNone.hidden { display: none; }

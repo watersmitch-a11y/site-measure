@@ -385,8 +385,11 @@ function facingOverlap(A, B, minGap, maxGap) {
 //   extras:  'roomId|wallIdx' -> [{ opening, startM, endM, fromRoomId }]  the other room's
 //            openings in a shared stretch, along the owner wall (only ones the owner lacks)
 //   sameAs:  opening id -> { roomId, openingId }  a doorway the owner already has
+//   joins:   roomId -> [{ x1, y1, x2, y2 }]  short lines across the wall thickness
+//            from a corner of a hidden wall to the owner's wall line, so the
+//            rooms' walls meet the shared wall instead of stopping short of it
 export function wallMerges(rooms, geom, maxGap = 0.3) {
-  const merges = { hidden: new Map(), shared: new Map(), extras: new Map(), sameAs: new Map() };
+  const merges = { hidden: new Map(), shared: new Map(), extras: new Map(), sameAs: new Map(), joins: new Map() };
   const push = (map, key, item) => {
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(item);
@@ -398,10 +401,16 @@ export function wallMerges(rooms, geom, maxGap = 0.3) {
       ra.walls.forEach((wa, ia) => {
         const A = wallFrame(pa, ia);
         rb.walls.forEach((wb, ib) => {
-          const ov = facingOverlap(A, wallFrame(pb, ib), -0.02, maxGap);
+          const B = wallFrame(pb, ib);
+          const ov = facingOverlap(A, B, -0.02, maxGap);
           if (!ov) return;
           const keyA = `${ra.id}|${ia}`;
           push(merges.hidden, `${rb.id}|${ib}`, ov.b);
+          [[ov.b[0] < 0.01, pb[ib]], [ov.b[1] > B.len - 0.01, pb[ib + 1]]].forEach(([atCorner, p]) => {
+            if (atCorner && ov.gap > 0.005) {
+              push(merges.joins, rb.id, { x1: p.x, y1: p.y, x2: p.x - A.n.x * ov.gap, y2: p.y - A.n.y * ov.gap });
+            }
+          });
           push(merges.shared, keyA, { s: ov.a[0], e: ov.a[1], otherRoomId: rb.id });
           (wb.openings || []).forEach((o) => {
             const span = openingSpan(wb, o);
@@ -475,4 +484,37 @@ export function snapOffset(rooms, geom, roomId, thicknessM, range = 0.35) {
   const dx = first.n.x * first.shift + (second ? second.n.x * second.shift : 0);
   const dy = first.n.y * first.shift + (second ? second.n.y * second.shift : 0);
   return Math.hypot(dx, dy) > 0.0005 ? { dx, dy } : null;
+}
+
+// The wall of another room that a room's wall faces most closely, for setting
+// exact offsets while moving it: { other, otherIdx, wallIdx, gap, n, u, len,
+// lo, hi } where n points from the other wall towards this room, u runs along
+// the other wall from its start, and lo/hi are where this room's wall starts
+// and ends along it. null if no facing wall is within maxGap.
+export function nearestFacingWall(rooms, geom, roomId, maxGap = 1.5) {
+  const moving = rooms.find((r) => r.id === roomId);
+  const pm = geom.get(roomId).points;
+  let best = null;
+  rooms.filter((r) => r !== moving).forEach((other) => {
+    const po = geom.get(other.id).points;
+    other.walls.forEach((wo, io) => {
+      const O = wallFrame(po, io);
+      if (O.len < 0.01) return;
+      moving.walls.forEach((wm, im) => {
+        const M = wallFrame(pm, im);
+        if (M.len < 0.01 || dot(M.n, O.n) > -0.999) return;
+        const gap = dot(sub(M.a, O.a), O.n);
+        if (gap < -0.05 || gap > maxGap) return;
+        const m0 = dot(sub(M.a, O.a), O.u);
+        const m1 = m0 + dot(M.u, O.u) * M.len;
+        const lo = Math.min(m0, m1);
+        const hi = Math.max(m0, m1);
+        const apart = Math.max(lo - O.len, -hi, 0); // along the wall, 0 when they overlap
+        const score = Math.abs(gap) + apart * 2;
+        if (apart > 1.5) return;
+        if (!best || score < best.score) best = { score, other, otherIdx: io, wallIdx: im, gap, n: O.n, u: O.u, len: O.len, lo, hi };
+      });
+    });
+  });
+  return best;
 }

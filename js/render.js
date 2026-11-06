@@ -381,6 +381,11 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
     }
   }
 
+  // close this room's corners across the wall thickness to a shared wall
+  (merges.joins.get(room.id) || []).forEach((j) => {
+    group.appendChild(el('line', { ...j, class: 'plan-wall', 'stroke-width': strokeWidth }));
+  });
+
   if (!active || print) return;
 
   // dashed line from the open end to where the room closes (its start, or

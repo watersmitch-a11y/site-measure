@@ -135,6 +135,12 @@ const els = {
   panelMoveRoomBtn: $('#panelMoveRoomBtn'),
   moveBar: $('#moveBar'),
   moveTitle: $('#moveTitle'),
+  moveDims: $('#moveDims'),
+  moveDimsNone: $('#moveDimsNone'),
+  moveGapLabel: $('#moveGapLabel'),
+  moveAlongLabel: $('#moveAlongLabel'),
+  moveGapInputs: $('#moveGapInputs'),
+  moveAlongInputs: $('#moveAlongInputs'),
   nudgePad: $('#nudgePad'),
   nudgeStep: $('#nudgeStep'),
   rotateLeftBtn: $('#rotateLeftBtn'),
@@ -376,6 +382,7 @@ function render() {
   renderRoomTabs();
   renderRoomCard();
   drawPlan();
+  updateMoveDims();
   renderStats();
   renderWallList();
   els.closePolygonBtn.classList.toggle('hidden', state.walls.length < rm.minWallsToClose(activeRoom()));
@@ -1131,6 +1138,53 @@ function endMove(keep) {
   render();
 }
 
+// The gap and along-the-wall offset to the nearest facing wall of another
+// room, shown as editable figures while moving. Typing a figure moves the room
+// to it. The offset runs from the top (or left) end of the other room's wall
+// to the same end of this room's wall.
+function updateMoveDims() {
+  const room = movingRoom();
+  if (!room) return;
+  const ref = rm.nearestFacingWall(state.rooms, rm.roomGeometry(state.rooms), room.id);
+  ui.moving.ref = null;
+  els.moveDims.classList.toggle('hidden', !ref);
+  els.moveDimsNone.classList.toggle('hidden', !!ref);
+  if (!ref) return;
+  const ends = planEnds(ref.otherIdx, ref.other);
+  const fromStart = ends.first === 'start';
+  const endName = ends[ends.first]; // 'top' or 'left'
+  ui.moving.ref = {
+    n: ref.n,
+    dir: fromStart ? ref.u : { x: -ref.u.x, y: -ref.u.y },
+    gap: ref.gap,
+    along: fromStart ? ref.lo : ref.len - ref.hi,
+  };
+  const otherName = rm.roomLabel(ref.other, roomIndex(ref.other));
+  els.moveGapLabel.textContent = `Gap to ${otherName}'s ${roomSide(ref.otherIdx, ref.other)} wall`;
+  els.moveAlongLabel.textContent =
+    `Offset of the ${endName} end from the ${endName} end of that wall (+ = ${endName === 'top' ? 'down' : 'right'})`;
+  if (ui.moving.dimsUnit !== state.unit) {
+    buildLengthInput(els.moveGapInputs, state.unit, 'mvGap');
+    buildLengthInput(els.moveAlongInputs, state.unit, 'mvAlong');
+    ui.moving.dimsUnit = state.unit;
+  }
+  // don't overwrite a figure while it's being typed
+  if (!els.moveGapInputs.contains(document.activeElement)) setLength(state.unit, 'mvGap', round3(ui.moving.ref.gap));
+  if (!els.moveAlongInputs.contains(document.activeElement)) setLength(state.unit, 'mvAlong', round3(ui.moving.ref.along));
+}
+
+function applyMoveDim(which) {
+  const room = movingRoom();
+  const ref = ui.moving && ui.moving.ref;
+  if (!room || !ref) return;
+  const opts = { allowZero: true, allowNegative: true };
+  const value = readLength(state.unit, which === 'gap' ? 'mvGap' : 'mvAlong', opts);
+  if (value == null) return;
+  const [dir, now] = which === 'gap' ? [ref.n, ref.gap] : [ref.dir, ref.along];
+  shiftRoom(room, dir.x * (value - now), dir.y * (value - now));
+  render();
+}
+
 function movingRoom() {
   return ui.moving && state.rooms.find((r) => r.id === ui.moving.roomId);
 }
@@ -1805,6 +1859,8 @@ els.nudgePad.addEventListener('click', (e) => {
   render();
 });
 els.matchDoorBtn.addEventListener('click', openDoorMatch);
+els.moveGapInputs.addEventListener('change', () => applyMoveDim('gap'));
+els.moveAlongInputs.addEventListener('change', () => applyMoveDim('along'));
 els.applyDoorMatchBtn.addEventListener('click', handleDoorMatch);
 els.closeDoorMatchBtn.addEventListener('click', () => els.doorMatchPanel.classList.add('hidden'));
 els.cancelDoorMatchBtn.addEventListener('click', () => els.doorMatchPanel.classList.add('hidden'));

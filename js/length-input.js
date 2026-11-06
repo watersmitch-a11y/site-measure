@@ -139,8 +139,9 @@ export function buildLengthInput(container, unit, prefix, placeholder) {
 }
 
 // Returns meters, or null when blank or invalid. Zero is only accepted with
-// allowZero (e.g. a 0 mm distance from a corner, or a door's 0 mm sill).
-export function readLength(unit, prefix, { allowZero = false } = {}) {
+// allowZero (e.g. a 0 mm distance from a corner, or a door's 0 mm sill);
+// negative values only with allowNegative (e.g. an offset either side of a line).
+export function readLength(unit, prefix, { allowZero = false, allowNegative = false } = {}) {
   let meters;
   if (unit === 'ft-in') {
     const feetRaw = document.getElementById(`${prefix}Feet`).value.trim();
@@ -156,7 +157,7 @@ export function readLength(unit, prefix, { allowZero = false } = {}) {
     if (unit === 'mm') meters = units.parseMm(String(value));
     else meters = unit === 'm' ? units.parseMeters(String(value)) : units.parseDecimalFeet(String(value));
   }
-  if (meters == null || !Number.isFinite(meters) || meters < 0) return null;
+  if (meters == null || !Number.isFinite(meters) || (meters < 0 && !allowNegative)) return null;
   if (meters === 0 && !allowZero) return null;
   return meters;
 }
