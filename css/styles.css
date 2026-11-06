@@ -684,3 +684,5 @@ main {
 .plan-cut-fill { fill: var(--surface); }
 .print-view .plan-band { fill: #111; stroke: #111; }
 .print-view .plan-cut-fill { fill: #fff; }
+
+.app-version { text-align: center; font-size: 0.75rem; color: var(--text-dim); margin: 0.5rem 0 0; }

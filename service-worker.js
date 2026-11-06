@@ -1,4 +1,4 @@
-const CACHE_NAME = 'site-measure-v21';
+const CACHE_NAME = 'site-measure-v22';
 const CORE_ASSETS = [
   './',
   './index.html',

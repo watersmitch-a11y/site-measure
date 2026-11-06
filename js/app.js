@@ -7,6 +7,9 @@ import * as op from './openings.js';
 import * as rm from './rooms.js';
 import { exportPlan } from './export.js';
 
+// Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
+const APP_VERSION = 22;
+
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -128,6 +131,7 @@ const els = {
   closeRoomPanelBtn: $('#closeRoomPanelBtn'),
   sharedStartLabel: $('#sharedStartLabel'),
   exportBtn: $('#exportBtn'),
+  appVersion: $('#appVersion'),
   zoomInBtn: $('#zoomInBtn'),
   zoomOutBtn: $('#zoomOutBtn'),
   zoomFitBtn: $('#zoomFitBtn'),
@@ -1888,9 +1892,29 @@ function init() {
   buildCeilingInput();
   render();
 
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('service-worker.js').catch(() => {});
-  }
+  els.appVersion.textContent = `Site Measure v${APP_VERSION}`;
+  registerServiceWorker();
+}
+
+// Keep an installed copy up to date: look for a new version on start and
+// whenever the app comes back to the front, and reload once when one takes
+// over, so changes show without closing the app by hand.
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return; // first install: nothing old to replace
+    reloading = true;
+    persist();
+    location.reload();
+  });
+  navigator.serviceWorker.register('service-worker.js').then((reg) => {
+    reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') reg.update().catch(() => {});
+    });
+  }).catch(() => {});
 }
 
 init();
