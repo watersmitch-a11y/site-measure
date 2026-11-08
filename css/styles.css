@@ -698,3 +698,6 @@ main {
 .print-view .plan-cut-fill { fill: #fff; }
 
 .app-version { text-align: center; font-size: 0.75rem; color: var(--text-dim); margin: 0.5rem 0 0; }
+
+#keepClosedRow.hidden, #panelLengthError.hidden { display: none; }
+#keepClosedRow .field-label { margin-top: 0.75rem; }

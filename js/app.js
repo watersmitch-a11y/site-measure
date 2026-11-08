@@ -8,7 +8,7 @@ import * as rm from './rooms.js';
 import { exportPlan } from './export.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-const APP_VERSION = 23;
+const APP_VERSION = 24;
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -137,6 +137,11 @@ const els = {
   zoomFitBtn: $('#zoomFitBtn'),
   moveRoomBtn: $('#moveRoomBtn'),
   panelMoveRoomBtn: $('#panelMoveRoomBtn'),
+  panelLengthInputs: $('#panelLengthInputs'),
+  keepClosedRow: $('#keepClosedRow'),
+  keepClosedSelect: $('#keepClosedSelect'),
+  panelLengthError: $('#panelLengthError'),
+  updateLengthBtn: $('#updateLengthBtn'),
   moveBar: $('#moveBar'),
   moveTitle: $('#moveTitle'),
   moveDimsRef: $('#moveDimsRef'),
@@ -862,8 +867,13 @@ function openWallPanel(id) {
   els.panelMoveRoomBtn.classList.toggle('hidden', !canMove(activeRoom()));
   ui.panelWallId = id;
   const roomPrefix = state.rooms.length > 1 ? `${activeLabel()} – ` : '';
+  const side = roomSide(idx);
   els.wallPanelTitle.textContent =
-    `${roomPrefix}Wall ${idx + 1} – ${units.formatLength(wall.lengthM, state.unit)} · ${roomSide(idx)} wall`;
+    `${roomPrefix}${side.charAt(0).toUpperCase()}${side.slice(1)} wall – ${units.formatLength(wall.lengthM, state.unit)}`;
+  buildLengthInput(els.panelLengthInputs, state.unit, 'panelLen');
+  setLength(state.unit, 'panelLen', wall.lengthM);
+  els.panelLengthError.classList.add('hidden');
+  fillKeepClosed();
   buildLengthInput(els.wallCeilingInputs, state.unit, 'wallCeil', 'Same as room');
   setLength(state.unit, 'wallCeil', wall.ceilingHeightM || null);
   // left/top end on the left-hand button, so the toggle reads like the plan
@@ -878,6 +888,87 @@ function openWallPanel(id) {
   renderOpeningList();
   els.wallPanel.classList.remove('hidden');
   render();
+}
+
+// ---------- changing a finished wall's length ----------
+// In a closed room a longer or shorter wall leaves a gap the same size, along
+// that wall's line. A wall running the opposite way can grow by the same
+// amount (or one running the same way can shrink) to close it again.
+
+function closingPartners(room, idx) {
+  if (!isShapeClosed(room)) return [];
+  const headings = rm.roomGeometry(state.rooms).get(room.id);
+  const pts = headings.points;
+  const dirOf = (j) => {
+    const dx = pts[j + 1].x - pts[j].x;
+    const dy = pts[j + 1].y - pts[j].y;
+    const l = Math.hypot(dx, dy) || 1;
+    return { x: dx / l, y: dy / l };
+  };
+  const u = dirOf(idx);
+  return room.walls
+    .map((w, j) => ({ j, w, d: dirOf(j).x * u.x + dirOf(j).y * u.y }))
+    .filter(({ j, d }) => j !== idx && Math.abs(Math.abs(d) - 1) < 0.001)
+    .map(({ j, w, d }) => ({ j, w, sign: d < 0 ? 1 : -1 })) // opposite way grows, same way shrinks
+    .sort((p, q) => (p.sign - q.sign) || (q.w.lengthM - p.w.lengthM)); // opposite, longest first
+}
+
+function fillKeepClosed() {
+  const room = activeRoom();
+  const idx = state.walls.findIndex((w) => w.id === ui.panelWallId);
+  const wall = state.walls[idx];
+  const partners = closingPartners(room, idx);
+  els.keepClosedRow.classList.toggle('hidden', !partners.length);
+  if (!partners.length) return;
+  const newLen = readLength(state.unit, 'panelLen');
+  const delta = newLen == null ? 0 : newLen - wall.lengthM;
+  els.keepClosedSelect.innerHTML = '';
+  partners.forEach(({ j, w, sign }) => {
+    const opt = document.createElement('option');
+    opt.value = w.id;
+    const after = w.lengthM + sign * delta;
+    const change = Math.abs(delta) > 0.0005 ? ` → ${units.formatLength(after, state.unit)}` : '';
+    const sideName = roomSide(j, room);
+    opt.textContent = `${sideName.charAt(0).toUpperCase()}${sideName.slice(1)} wall (Wall ${j + 1}): ` +
+      `${units.formatLength(w.lengthM, state.unit)}${change}`;
+    els.keepClosedSelect.appendChild(opt);
+  });
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = 'Nothing (leave a gap)';
+  els.keepClosedSelect.appendChild(none);
+  // the opposite wall unless a choice was picked for this wall
+  const picked = ui.keepClosedPick;
+  if (picked && picked.wallId === ui.panelWallId && [...els.keepClosedSelect.options].some((o) => o.value === picked.value)) {
+    els.keepClosedSelect.value = picked.value;
+  } else {
+    els.keepClosedSelect.selectedIndex = 0;
+  }
+}
+
+function handleUpdateLength() {
+  const room = activeRoom();
+  const idx = state.walls.findIndex((w) => w.id === ui.panelWallId);
+  if (idx < 0) return;
+  const wall = state.walls[idx];
+  const showError = (msg) => {
+    els.panelLengthError.textContent = msg;
+    els.panelLengthError.classList.remove('hidden');
+  };
+  const newLen = readLength(state.unit, 'panelLen');
+  if (newLen == null) return showError('Enter the wall length.');
+  const delta = newLen - wall.lengthM;
+  const partner = els.keepClosedRow.classList.contains('hidden')
+    ? null
+    : closingPartners(room, idx).find((p) => p.w.id === els.keepClosedSelect.value);
+  if (partner && partner.w.lengthM + partner.sign * delta < 0.01) {
+    return showError(`That would make the ${roomSide(partner.j, room)} wall too short; pick another wall to change.`);
+  }
+  wall.lengthM = newLen;
+  if (partner) partner.w.lengthM += partner.sign * delta;
+  settleSharedStart(room);
+  persist();
+  openWallPanel(wall.id); // refresh the title, figures and choices
 }
 
 function closeWallPanel() {
@@ -1803,6 +1894,11 @@ els.wallCeilingInputs.addEventListener('change', () => {
 });
 
 els.addOpeningBtn.addEventListener('click', () => showOpeningForm(null));
+els.panelLengthInputs.addEventListener('input', fillKeepClosed);
+els.keepClosedSelect.addEventListener('change', () => {
+  ui.keepClosedPick = { wallId: ui.panelWallId, value: els.keepClosedSelect.value };
+});
+els.updateLengthBtn.addEventListener('click', handleUpdateLength);
 els.cancelOpeningBtn.addEventListener('click', hideOpeningForm);
 els.openingTypeButtons.addEventListener('click', (e) => {
   const btn = e.target.closest('.dir-btn');

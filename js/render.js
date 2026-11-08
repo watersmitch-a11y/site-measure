@@ -346,7 +346,7 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
         .filter((o) => o.type === 'door' && (o.swing || 'in') === swingOnLabelSide)
         .map((o) => openingSpan(w, o))
         .sort((p, q) => p.startM - q.startM);
-      const labelText = `${i + 1}. ${formatLength(w.lengthM, unit)}`;
+      const labelText = formatLength(w.lengthM, unit); // no wall number: it read as part of the length
       const halfLabel = labelText.length * fontSize * 0.28; // approx. half the text width
       let labelAt = w.lengthM / 2;
       if (blocked.some((sp) => sp.startM < labelAt + halfLabel && sp.endM > labelAt - halfLabel)) {

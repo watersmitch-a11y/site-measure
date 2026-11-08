@@ -177,6 +177,17 @@
       </div>
 
       <div class="panel-section">
+        <div class="field-label">Wall length</div>
+        <div id="panelLengthInputs" class="length-inputs"></div>
+        <div id="keepClosedRow" class="hidden">
+          <div class="field-label">To keep the room closed, also change</div>
+          <select id="keepClosedSelect" class="panel-select"></select>
+        </div>
+        <p id="panelLengthError" class="error-text hidden"></p>
+        <button id="updateLengthBtn" type="button" class="secondary-btn">Update Length</button>
+      </div>
+
+      <div class="panel-section">
         <div class="field-label">Ceiling height for this wall (blank = use room height)</div>
         <div id="wallCeilingInputs" class="length-inputs"></div>
       </div>
