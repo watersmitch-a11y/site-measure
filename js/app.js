@@ -8,7 +8,7 @@ import * as rm from './rooms.js';
 import { exportPlan } from './export.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-const APP_VERSION = 24;
+const APP_VERSION = 25;
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -145,7 +145,7 @@ const els = {
   moveBar: $('#moveBar'),
   moveTitle: $('#moveTitle'),
   moveDimsRef: $('#moveDimsRef'),
-  moveAlongLabel: $('#moveAlongLabel'),
+  moveAlongEnd: $('#moveAlongEnd'),
   moveGapInputs: $('#moveGapInputs'),
   moveAlongInputs: $('#moveAlongInputs'),
   nudgePad: $('#nudgePad'),
@@ -1252,24 +1252,34 @@ function updateMoveDims() {
   });
   if (!ref) {
     els.moveDimsRef.textContent = 'Bring it near another room to set an exact gap and offset';
-    els.moveAlongLabel.textContent = 'Offset';
+    els.moveAlongEnd.disabled = true;
     setLength(state.unit, 'mvGap', null);
     setLength(state.unit, 'mvAlong', null);
     return;
   }
-  const ends = planEnds(ref.otherIdx, ref.other);
-  const fromStart = ends.first === 'start';
-  const endName = ends[ends.first]; // 'top' or 'left'
+  // The offset runs between the same ends of the two walls: left or right
+  // (top or bottom for upright walls), as picked in the dropdown, and is
+  // positive towards the other end.
+  const ends = planEnds(ref.otherIdx, ref.other); // first = the left/top end
+  const firstName = ends[ends.first];
+  const secondName = { left: 'right', top: 'bottom' }[firstName];
+  const towards = { left: 'right', right: 'left', top: 'down', bottom: 'up' };
+  const opts = els.moveAlongEnd.options;
+  opts[0].textContent = `Offset from ${firstName} (+ ${towards[firstName]})`;
+  opts[1].textContent = `Offset from ${secondName} (+ ${towards[secondName]})`;
+  els.moveAlongEnd.disabled = false;
+  const endName = els.moveAlongEnd.value === 'second' ? secondName : firstName;
+  // measured from the host wall's start end, or back from its far end
+  const fromWallStart = (els.moveAlongEnd.value === 'first') === (ends.first === 'start');
   ui.moving.ref = {
     n: ref.n,
-    dir: fromStart ? ref.u : { x: -ref.u.x, y: -ref.u.y },
+    dir: fromWallStart ? ref.u : { x: -ref.u.x, y: -ref.u.y },
     gap: ref.gap,
-    along: fromStart ? ref.lo : ref.len - ref.hi,
+    along: fromWallStart ? ref.lo : ref.len - ref.hi,
   };
   const otherName = rm.roomLabel(ref.other, roomIndex(ref.other));
   els.moveDimsRef.textContent =
     `To ${otherName}'s ${roomSide(ref.otherIdx, ref.other)} wall · offset between the ${endName} ends`;
-  els.moveAlongLabel.textContent = `Offset (+ = ${endName === 'top' ? 'down' : 'right'})`;
   // don't overwrite a figure while it's being typed
   if (!els.moveGapInputs.contains(document.activeElement)) setLength(state.unit, 'mvGap', round3(ui.moving.ref.gap));
   if (!els.moveAlongInputs.contains(document.activeElement)) setLength(state.unit, 'mvAlong', round3(ui.moving.ref.along));
@@ -1984,6 +1994,7 @@ els.nudgePad.addEventListener('click', (e) => {
 els.matchDoorBtn.addEventListener('click', openDoorMatch);
 els.moveGapInputs.addEventListener('change', () => applyMoveDim('gap'));
 els.moveAlongInputs.addEventListener('change', () => applyMoveDim('along'));
+els.moveAlongEnd.addEventListener('change', updateMoveDims);
 els.applyDoorMatchBtn.addEventListener('click', handleDoorMatch);
 els.closeDoorMatchBtn.addEventListener('click', () => els.doorMatchPanel.classList.add('hidden'));
 els.cancelDoorMatchBtn.addEventListener('click', () => els.doorMatchPanel.classList.add('hidden'));
