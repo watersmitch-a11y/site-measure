@@ -8,7 +8,7 @@ import * as rm from './rooms.js';
 import { exportPlan } from './export.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-const APP_VERSION = 26;
+const APP_VERSION = 27;
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;

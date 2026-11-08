@@ -92,15 +92,16 @@ export function renderPlan(svg, rooms, unit, {
   }
 
   // inactive rooms first so the active room draws on top
-  rooms
-    .filter((r) => r !== activeRoom)
-    .forEach((r) => {
-      const index = rooms.indexOf(r);
-      drawRoom(svg, r, index, geom.get(r.id), false, ctx);
-    });
-  if (activeRoom) {
-    drawRoom(svg, activeRoom, rooms.indexOf(activeRoom), geom.get(activeRoom.id), true, ctx);
-  }
+  // one room failing to draw mustn't take the rest of the plan with it
+  const safeDraw = (r, active) => {
+    try {
+      drawRoom(svg, r, rooms.indexOf(r), geom.get(r.id), active, ctx);
+    } catch (err) {
+      console.error(`Couldn't draw ${roomLabel(r, rooms.indexOf(r))}`, err);
+    }
+  };
+  rooms.filter((r) => r !== activeRoom).forEach((r) => safeDraw(r, false));
+  if (activeRoom) safeDraw(activeRoom, true);
   svg.appendChild(brightGroup);
 
   // the shared wall a new room will get, while it's being placed
@@ -150,6 +151,7 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
     const after = j < n ? j : loop ? 0 : null;
     const p = points[j];
     const plain = (k) => { const o = outOf(unitOf(k)); return { x: p.x + o.x * WALL_T, y: p.y + o.y * WALL_T }; };
+    if (before === null && after === null) return p; // a room with no walls yet
     if (before === null) return plain(after);
     if (after === null) return plain(before);
     const u1 = unitOf(before);
