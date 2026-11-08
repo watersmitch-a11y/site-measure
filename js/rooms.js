@@ -455,7 +455,9 @@ export function snapOffset(rooms, geom, roomId, thicknessM, range = 0.35) {
         if (facing < 0) {
           const overlap = Math.min(hi, O.len) - Math.max(lo, 0);
           if (overlap < 0.05) return;
-          if (Math.abs(thicknessM - off) <= range) options.push({ n: O.n, shift: thicknessM - off });
+          // only walls a wall-thickness apart (give or take) count as facing
+          if (Math.abs(thicknessM - off) > range) return;
+          options.push({ n: O.n, shift: thicknessM - off });
           // line up the ends of the two facing walls
           [[lo, 0], [lo, O.len], [hi, 0], [hi, O.len]].forEach(([mEnd, oEnd]) => {
             if (Math.abs(oEnd - mEnd) <= range) options.push({ n: O.u, shift: oEnd - mEnd });

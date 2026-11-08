@@ -8,7 +8,7 @@ import * as rm from './rooms.js';
 import { exportPlan } from './export.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-const APP_VERSION = 22;
+const APP_VERSION = 23;
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -139,9 +139,7 @@ const els = {
   panelMoveRoomBtn: $('#panelMoveRoomBtn'),
   moveBar: $('#moveBar'),
   moveTitle: $('#moveTitle'),
-  moveDims: $('#moveDims'),
-  moveDimsNone: $('#moveDimsNone'),
-  moveGapLabel: $('#moveGapLabel'),
+  moveDimsRef: $('#moveDimsRef'),
   moveAlongLabel: $('#moveAlongLabel'),
   moveGapInputs: $('#moveGapInputs'),
   moveAlongInputs: $('#moveAlongInputs'),
@@ -1151,9 +1149,23 @@ function updateMoveDims() {
   if (!room) return;
   const ref = rm.nearestFacingWall(state.rooms, rm.roomGeometry(state.rooms), room.id);
   ui.moving.ref = null;
-  els.moveDims.classList.toggle('hidden', !ref);
-  els.moveDimsNone.classList.toggle('hidden', !!ref);
-  if (!ref) return;
+  if (ui.moving.dimsUnit !== state.unit) {
+    buildLengthInput(els.moveGapInputs, state.unit, 'mvGap');
+    buildLengthInput(els.moveAlongInputs, state.unit, 'mvAlong');
+    ui.moving.dimsUnit = state.unit;
+  }
+  // the fields stay in place (greyed out) when there's no room nearby, so the
+  // bar keeps its height and the plan doesn't jump while dragging
+  [els.moveGapInputs, els.moveAlongInputs].forEach((box) => {
+    box.querySelectorAll('input, button').forEach((c) => { c.disabled = !ref; });
+  });
+  if (!ref) {
+    els.moveDimsRef.textContent = 'Bring it near another room to set an exact gap and offset';
+    els.moveAlongLabel.textContent = 'Offset';
+    setLength(state.unit, 'mvGap', null);
+    setLength(state.unit, 'mvAlong', null);
+    return;
+  }
   const ends = planEnds(ref.otherIdx, ref.other);
   const fromStart = ends.first === 'start';
   const endName = ends[ends.first]; // 'top' or 'left'
@@ -1164,14 +1176,9 @@ function updateMoveDims() {
     along: fromStart ? ref.lo : ref.len - ref.hi,
   };
   const otherName = rm.roomLabel(ref.other, roomIndex(ref.other));
-  els.moveGapLabel.textContent = `Gap to ${otherName}'s ${roomSide(ref.otherIdx, ref.other)} wall`;
-  els.moveAlongLabel.textContent =
-    `Offset of the ${endName} end from the ${endName} end of that wall (+ = ${endName === 'top' ? 'down' : 'right'})`;
-  if (ui.moving.dimsUnit !== state.unit) {
-    buildLengthInput(els.moveGapInputs, state.unit, 'mvGap');
-    buildLengthInput(els.moveAlongInputs, state.unit, 'mvAlong');
-    ui.moving.dimsUnit = state.unit;
-  }
+  els.moveDimsRef.textContent =
+    `To ${otherName}'s ${roomSide(ref.otherIdx, ref.other)} wall · offset between the ${endName} ends`;
+  els.moveAlongLabel.textContent = `Offset (+ = ${endName === 'top' ? 'down' : 'right'})`;
   // don't overwrite a figure while it's being typed
   if (!els.moveGapInputs.contains(document.activeElement)) setLength(state.unit, 'mvGap', round3(ui.moving.ref.gap));
   if (!els.moveAlongInputs.contains(document.activeElement)) setLength(state.unit, 'mvAlong', round3(ui.moving.ref.along));
@@ -1682,23 +1689,39 @@ els.zoomOutBtn.addEventListener('click', () => zoomAt(0.5, 0.5, 1 / 1.5));
 els.zoomFitBtn.addEventListener('click', zoomFit);
 
 // dragging a room while it's being moved; the view is held still meanwhile
+// The room follows the finger's movement since it went down, scaled from
+// screen pixels to plan metres once at the start, so nothing that shifts the
+// page during the drag can make the room jump.
 els.planSvg.addEventListener('pointerdown', (e) => {
   const room = movingRoom();
   if (!room) return;
   const vb = els.planSvg.viewBox.baseVal;
+  const r = els.planSvg.getBoundingClientRect();
   ui.moving.viewBox = { x: vb.x, y: vb.y, width: vb.width, height: vb.height };
-  ui.moving.drag = { start: svgPoint(e), x: room.anchor.x, y: room.anchor.y };
+  ui.moving.drag = {
+    clientX: e.clientX,
+    clientY: e.clientY,
+    metresPerPx: Math.max(vb.width / r.width, vb.height / r.height), // the view is fitted ('meet')
+    x: room.anchor.x,
+    y: room.anchor.y,
+  };
   els.planSvg.setPointerCapture(e.pointerId);
 });
+let dragFrame = null;
 els.planSvg.addEventListener('pointermove', (e) => {
   if (ui.pinch) return;
   const room = movingRoom();
   const drag = ui.moving && ui.moving.drag;
-  if (!room || !drag || !drag.start) return;
-  const pt = svgPoint(e);
-  room.anchor.x = round3(drag.x + pt.x - drag.start.x);
-  room.anchor.y = round3(drag.y + pt.y - drag.start.y);
-  render();
+  if (!room || !drag) return;
+  room.anchor.x = round3(drag.x + (e.clientX - drag.clientX) * drag.metresPerPx);
+  room.anchor.y = round3(drag.y + (e.clientY - drag.clientY) * drag.metresPerPx);
+  // redraw at most once per screen refresh
+  if (dragFrame === null) {
+    dragFrame = requestAnimationFrame(() => {
+      dragFrame = null;
+      render();
+    });
+  }
 });
 // Dropping a dragged room with a wall close to another room's wall snaps it
 // to exactly a wall thickness apart, so the shared wall and doors merge.

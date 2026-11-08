@@ -672,10 +672,22 @@ main {
 .calc-preview:empty { display: none; }
 .calc-preview.bad { color: var(--red); }
 
-.move-dims.hidden { display: none; }
-.move-dims .field-label { margin-top: 0.4rem; }
-#moveDimsNone { margin: 0; }
-#moveDimsNone.hidden { display: none; }
+.move-dims-ref {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.move-dims-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+.move-dim { min-width: 0; }
+.move-dim .field-label { margin: 0.25rem 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.move-dim .length-inputs { flex-wrap: nowrap; gap: 0.3rem; }
+.move-dim .length-inputs input { min-height: 44px; padding: 0.5rem; font-size: 1rem; }
+.move-dim .length-inputs .unit-suffix { padding: 0; }
+.move-dim .calc-btn { min-width: 36px; }
+.move-dim .calc-preview { display: none; } /* a sum's answer replaces it on leaving the field */
+.move-dims input:disabled { opacity: 0.4; }
 
 /* ---------- walls drawn to scale ---------- */
 /* a hairline outline in the same colour closes anti-aliasing seams between bands */

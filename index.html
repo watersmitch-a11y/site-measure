@@ -45,13 +45,20 @@
 
     <div id="moveBar" class="move-bar hidden">
       <div class="move-title" id="moveTitle">Drag the room on the plan, or nudge it</div>
-      <div id="moveDims" class="move-dims hidden">
-        <div class="field-label" id="moveGapLabel">Gap</div>
-        <div id="moveGapInputs" class="length-inputs"></div>
-        <div class="field-label" id="moveAlongLabel">Offset along the wall</div>
-        <div id="moveAlongInputs" class="length-inputs"></div>
+      <!-- fixed height, so the plan below doesn't shift while dragging -->
+      <div id="moveDims" class="move-dims">
+        <div class="move-dims-ref" id="moveDimsRef"></div>
+        <div class="move-dims-row">
+          <div class="move-dim">
+            <div class="field-label">Gap</div>
+            <div id="moveGapInputs" class="length-inputs"></div>
+          </div>
+          <div class="move-dim">
+            <div class="field-label" id="moveAlongLabel">Offset</div>
+            <div id="moveAlongInputs" class="length-inputs"></div>
+          </div>
+        </div>
       </div>
-      <div id="moveDimsNone" class="hint-text">Bring it near another room to set an exact gap and offset.</div>
       <div class="move-controls">
         <div class="dir-pad nudge-pad" id="nudgePad">
           <button type="button" class="pad-btn pad-left" data-dx="-1" data-dy="0" aria-label="Nudge left"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 L20 11 H15.5 V21.5 H8.5 V11 H4 Z"/></svg></button>
