@@ -8,7 +8,7 @@ import * as rm from './rooms.js';
 import { exportPlan } from './export.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-const APP_VERSION = 27;
+const APP_VERSION = 28;
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -320,6 +320,38 @@ function renderMatchChips() {
     const edge = (Math.atan2(g.frame.x - g.target.x, -(g.frame.y - g.target.y)) * 180) / Math.PI;
     if (Math.abs(normalizeAngle180(edge - heading - 180)) < 0.5) addMatchChip('shared wall', span.lengthM);
   }
+  // up to the next room's wall in this direction
+  const [gap] = gapDims();
+  if (gap) addMatchChip(`to ${gap.to}`, gap.distM);
+}
+
+// Clear runs from the corner the next wall starts at to the nearest other
+// room's wall: the chosen direction only, or every square direction until
+// one is chosen. Lets a room be drawn to fill a gap between rooms.
+function gapDims() {
+  const room = activeRoom();
+  if (!room || ui.moving || ui.placingRoom || ui.placement) return [];
+  const g = geometryOf(room);
+  if (!ui.editingId && rm.roomClosed(room, g)) return [];
+  const from = g.points[entryIndex()];
+  if (!from) return [];
+  const chosen = selectedAbsoluteHeading();
+  const prev = previousHeading();
+  const headings = chosen != null
+    ? [chosen]
+    : [0, 90, 180, 270].filter((h) => prev == null || Math.abs(Math.abs(normalizeAngle180(h - prev)) - 180) > 0.01);
+  const geom = rm.roomGeometry(state.rooms);
+  return headings.map((h) => {
+    const run = rm.clearRunTo(state.rooms, geom, room.id, from, h);
+    if (!run) return null;
+    const other = state.rooms.find((r) => r.id === run.roomId);
+    return {
+      x1: from.x, y1: from.y, x2: run.x, y2: run.y,
+      distM: run.distM,
+      to: rm.roomLabel(other, roomIndex(other)),
+      label: units.formatLength(run.distM, state.unit),
+    };
+  }).filter(Boolean);
 }
 
 function addMatchChip(label, lengthM) {
@@ -404,6 +436,7 @@ function drawPlan() {
     activeRoomId: state.activeRoomId,
     selectedWallId: ui.panelWallId,
     previewLine: previewLine(),
+    gapDims: gapDims(),
     viewBox,
   });
   els.planWrap.classList.toggle('zoomed', !!ui.view);
@@ -1633,6 +1666,7 @@ els.dirPad.addEventListener('click', (e) => {
   const btn = e.target.closest('.pad-btn');
   if (!btn || btn.disabled) return;
   setSelectedHeading(btn.dataset.heading === 'custom' ? 'custom' : Number(btn.dataset.heading));
+  drawPlan(); // the gap dimension follows the chosen direction
 });
 
 els.lrToggle.addEventListener('click', (e) => {
@@ -1640,8 +1674,9 @@ els.lrToggle.addEventListener('click', (e) => {
   if (!btn) return;
   setCustomSide(btn.dataset.side);
   renderMatchChips();
+  drawPlan();
 });
-els.customAngleInput.addEventListener('input', renderMatchChips);
+els.customAngleInput.addEventListener('input', () => { renderMatchChips(); drawPlan(); });
 els.matchChips.addEventListener('click', (e) => {
   const btn = e.target.closest('.chip.match');
   if (!btn) return;

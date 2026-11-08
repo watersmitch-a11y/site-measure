@@ -512,3 +512,61 @@ export function nearestFacingWall(rooms, geom, roomId, maxGap = 1.5) {
   });
   return best;
 }
+
+// How far a wall drawn from `from` in plan direction `heading` (0 up,
+// clockwise) can run before it meets another room's wall: the face of that
+// wall it reaches first (the measured line from inside that room, the outer
+// face of its band from outside). Returns { distM, roomId, x, y } or null.
+export function clearRunTo(rooms, geom, roomId, from, heading, thicknessM = DEFAULT_WALL_THICKNESS_M, maxM = 30) {
+  const rad = (heading * Math.PI) / 180;
+  const d = { x: Math.sin(rad), y: -Math.cos(rad) };
+  let best = null;
+  const hit = (a, b, other) => {
+    const e = { x: b.x - a.x, y: b.y - a.y };
+    const denom = d.x * e.y - d.y * e.x;
+    if (Math.abs(denom) < 1e-9) return; // running alongside it
+    const w = { x: a.x - from.x, y: a.y - from.y };
+    const t = (w.x * e.y - w.y * e.x) / denom;
+    const s = (w.x * d.y - w.y * d.x) / denom;
+    // just grazing an end (e.g. running along a wall's face) isn't meeting it
+    const graze = 0.005 / Math.hypot(e.x, e.y);
+    if (t < 0.02 || t > maxM || s < graze || s > 1 - graze) return;
+    if (!best || t < best.distM) best = { distM: t, roomId: other.id, x: from.x + d.x * t, y: from.y + d.y * t };
+  };
+  rooms.forEach((other) => {
+    if (other.id === roomId) return;
+    const pts = geom.get(other.id).points;
+    if (pts.length < 2) return;
+    const sign = insideSign(pts);
+    other.walls.forEach((_, i) => {
+      const a = pts[i];
+      const b = pts[i + 1];
+      if (!a || !b) return;
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (len < 0.01) return;
+      const u = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
+      const o = { x: u.y * sign * thicknessM, y: -u.x * sign * thicknessM }; // outward, a wall thick
+      hit(a, b, other);
+      // the band's outer face, run on past the corners where bands mitre
+      const ext = { x: u.x * thicknessM, y: u.y * thicknessM };
+      hit({ x: a.x + o.x - ext.x, y: a.y + o.y - ext.y }, { x: b.x + o.x + ext.x, y: b.y + o.y + ext.y }, other);
+    });
+  });
+  if (!best) return null;
+  // a run that slides along or through another room's wall isn't a clear gap
+  const mid = { x: (from.x + best.x) / 2, y: (from.y + best.y) / 2 };
+  const blocked = rooms.some((other) => {
+    if (other.id === roomId) return false;
+    const pts = geom.get(other.id).points;
+    return other.walls.some((_, i) => pts[i] && pts[i + 1] && distToSegment(mid, pts[i], pts[i + 1]) < thicknessM - 0.001);
+  });
+  return blocked ? null : best;
+}
+
+function distToSegment(p, a, b) {
+  const ex = b.x - a.x;
+  const ey = b.y - a.y;
+  const l2 = ex * ex + ey * ey;
+  const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * ex + (p.y - a.y) * ey) / l2)) : 0;
+  return Math.hypot(p.x - (a.x + ex * t), p.y - (a.y + ey * t));
+}

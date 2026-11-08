@@ -45,7 +45,7 @@ export function fitViewBox(rooms) {
 // shared walls don't put two labels in the same gap, and no arrows/markers.
 // viewBox ({ x, y, width, height }) holds the view still, e.g. while dragging.
 export function renderPlan(svg, rooms, unit, {
-  activeRoomId = null, selectedWallId = null, previewLine = null, print = false, viewBox = null,
+  activeRoomId = null, selectedWallId = null, previewLine = null, gapDims = [], print = false, viewBox = null,
 } = {}) {
   svg.innerHTML = '';
 
@@ -103,6 +103,36 @@ export function renderPlan(svg, rooms, unit, {
   rooms.filter((r) => r !== activeRoom).forEach((r) => safeDraw(r, false));
   if (activeRoom) safeDraw(activeRoom, true);
   svg.appendChild(brightGroup);
+
+  // clear runs to the next room's wall, for drawing a room into a gap
+  gapDims.forEach((dim) => {
+    const dx = dim.x2 - dim.x1;
+    const dy = dim.y2 - dim.y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const tick = fontSize * 0.3;
+    svg.appendChild(el('line', {
+      x1: dim.x1, y1: dim.y1, x2: dim.x2, y2: dim.y2,
+      class: 'plan-dim', 'stroke-width': strokeWidth * 0.4,
+    }));
+    svg.appendChild(el('line', {
+      x1: dim.x2 - nx * tick, y1: dim.y2 - ny * tick, x2: dim.x2 + nx * tick, y2: dim.y2 + ny * tick,
+      class: 'plan-dim-tick', 'stroke-width': strokeWidth * 0.5,
+    }));
+    const mx = (dim.x1 + dim.x2) / 2 + nx * fontSize * 0.6;
+    const my = (dim.y1 + dim.y2) / 2 + ny * fontSize * 0.6;
+    const label = el('text', {
+      x: mx, y: my,
+      'text-anchor': 'middle',
+      'dominant-baseline': 'central',
+      'font-size': fontSize * 0.8,
+      transform: `rotate(${readableAngle(Math.atan2(dy, dx) * (180 / Math.PI))}, ${mx}, ${my})`,
+      class: 'plan-dim-label',
+    });
+    label.textContent = dim.label;
+    svg.appendChild(label);
+  });
 
   // the shared wall a new room will get, while it's being placed
   if (previewLine) {

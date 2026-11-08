@@ -717,3 +717,8 @@ main {
 /* the Gap label and the offset dropdown take the same height, so the two fields line up */
 .move-dim .field-label,
 .move-dim .along-end { height: 1.25rem; line-height: 1.25rem; margin: 0.25rem 0; box-sizing: border-box; }
+
+/* clear runs to the next room's wall while drawing a room into a gap */
+.plan-dim { stroke: var(--accent); stroke-dasharray: 0.08 0.06; opacity: 0.9; }
+.plan-dim-tick { stroke: var(--accent); }
+.plan-dim-label { fill: var(--accent); font-weight: 600; }
