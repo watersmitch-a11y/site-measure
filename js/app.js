@@ -8,7 +8,7 @@ import * as rm from './rooms.js';
 import { exportPlan } from './export.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-const APP_VERSION = 25;
+const APP_VERSION = 26;
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -1734,7 +1734,12 @@ els.planSvg.addEventListener('touchstart', (e) => {
     const { fx, fy } = planFraction(mid.x, mid.y);
     ui.pinch = { dist: touchDist(e.touches), view, point: { x: view.x + fx * view.w, y: view.y + fy * view.w } };
     ui.pan = null;
-    if (ui.moving) ui.moving.drag = null;
+    // a pinch while moving a room zooms instead: drop the drag and the view
+    // it was holding still
+    if (ui.moving) {
+      ui.moving.drag = null;
+      ui.moving.viewBox = null;
+    }
   } else if (e.touches.length === 1 && ui.view && !ui.moving) {
     const t = e.touches[0];
     ui.pan = { x: t.clientX, y: t.clientY, view: { ...ui.view }, moved: false };
@@ -1795,7 +1800,7 @@ els.zoomFitBtn.addEventListener('click', zoomFit);
 // page during the drag can make the room jump.
 els.planSvg.addEventListener('pointerdown', (e) => {
   const room = movingRoom();
-  if (!room) return;
+  if (!room || !e.isPrimary || ui.pinch) return; // only the first finger drags
   const vb = els.planSvg.viewBox.baseVal;
   const r = els.planSvg.getBoundingClientRect();
   ui.moving.viewBox = { x: vb.x, y: vb.y, width: vb.width, height: vb.height };
