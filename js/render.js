@@ -45,7 +45,7 @@ export function fitViewBox(rooms) {
 // shared walls don't put two labels in the same gap, and no arrows/markers.
 // viewBox ({ x, y, width, height }) holds the view still, e.g. while dragging.
 export function renderPlan(svg, rooms, unit, {
-  activeRoomId = null, selectedWallId = null, previewLine = null, gapDims = [], print = false, viewBox = null,
+  activeRoomId = null, selectedWallId = null, previewLine = null, gapDims = [], print = false, viewBox = null, movingIds = null,
 } = {}) {
   svg.innerHTML = '';
 
@@ -83,7 +83,7 @@ export function renderPlan(svg, rooms, unit, {
   // shared stretches and doorways of the room being worked on, drawn undimmed on top
   const brightGroup = el('g', { class: 'plan-room active' });
   const merges = wallMerges(rooms, geom);
-  const ctx = { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup, print, merges, brightGroup, activeRoomId };
+  const ctx = { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup, print, merges, brightGroup, activeRoomId, movingIds };
 
   if (print) {
     rooms.forEach((r, i) => drawRoom(svg, r, i, geom.get(r.id), true, ctx));
@@ -158,7 +158,9 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
   const { points, target } = g;
   const { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup, print, merges, brightGroup, activeRoomId } = ctx;
   const walls = room.walls;
-  const group = el('g', { class: active ? 'plan-room active' : 'plan-room dim' });
+  // rooms being moved along with the active one are picked out too
+  const moving = !active && ctx.movingIds && ctx.movingIds.includes(room.id);
+  const group = el('g', { class: active ? 'plan-room active' : moving ? 'plan-room moving' : 'plan-room dim' });
   svg.appendChild(group);
 
   // Which side of each wall is inside the room. With y pointing down, +1

@@ -791,3 +791,107 @@ export function separateRoom(rooms, room) {
   });
   return joined;
 }
+
+// Set a room's walls to run through the given corner points (points[0] stays
+// where the room starts), keeping how its wall angles are stored.
+function setWallsThrough(room, frame, pts) {
+  let prev = null;
+  room.walls.forEach((w, i) => {
+    const dx = pts[i + 1].x - pts[i].x;
+    const dy = pts[i + 1].y - pts[i].y;
+    const heading = headingOf(dx, dy);
+    w.lengthM = Math.round(Math.hypot(dx, dy) * 1000) / 1000;
+    if (i === 0) {
+      const a = frame.heading == null ? heading : heading - frame.heading;
+      w.angle = Math.round((((a % 360) + 360) % 360) * 100) / 100;
+    } else {
+      w.angle = Math.round(normalize180(heading - prev) * 100) / 100;
+    }
+    prev = heading;
+  });
+}
+
+// Close a room by sharing its closing gap out over all its walls, in
+// proportion to their lengths (the surveyor's compass rule), instead of
+// adding a short closing wall. Returns the biggest change to any wall's
+// length, in metres, or null if there's nothing to spread.
+export function spreadClosingGap(rooms, room, apply = true) {
+  const g = roomGeometry(rooms).get(room.id);
+  const n = room.walls.length;
+  if (n < minWallsToClose(room) + 1) return null;
+  const last = g.points[n];
+  const gap = { x: g.target.x - last.x, y: g.target.y - last.y };
+  if (Math.hypot(gap.x, gap.y) < 0.0005) return null;
+  const total = room.walls.reduce((sum, w) => sum + w.lengthM, 0);
+  let run = 0;
+  const pts = g.points.map((p, k) => {
+    if (k > 0) run += room.walls[k - 1].lengthM;
+    return { x: p.x + gap.x * (run / total), y: p.y + gap.y * (run / total) };
+  });
+  const maxChange = Math.max(...room.walls.map((w, i) =>
+    Math.abs(Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y) - w.lengthM)));
+  if (apply) setWallsThrough(room, g.frame, pts);
+  return maxChange;
+}
+
+// Names for a room's corners from where they sit in the room, e.g.
+// "top-left"; corner k is where wall k starts.
+export function cornerNames(rooms, room) {
+  const pts = roomGeometry(rooms).get(room.id).points.slice(0, room.walls.length);
+  if (pts.length < 3) return pts.map((_, k) => `Corner ${k + 1}`);
+  const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+  const cy = pts.reduce((s, p) => s + p.y, 0) / pts.length;
+  const names = pts.map((p) => {
+    const v = Math.abs(p.y - cy) < 0.05 ? '' : p.y < cy ? 'top' : 'bottom';
+    const h = Math.abs(p.x - cx) < 0.05 ? '' : p.x < cx ? 'left' : 'right';
+    return [v, h].filter(Boolean).join('-') || 'middle';
+  });
+  return names.map((name, k) => (names.filter((x) => x === name).length > 1 ? `${name} (${k + 1})` : name));
+}
+
+// The plan's distance between two corners of a room.
+export function cornerDistance(rooms, room, a, b) {
+  const pts = roomGeometry(rooms).get(room.id).points;
+  return Math.hypot(pts[a].x - pts[b].x, pts[a].y - pts[b].y);
+}
+
+// A closed four-walled room is fixed by its four walls and one diagonal:
+// re-shape it so the diagonal between opposite corners a and b is lengthM,
+// keeping the wall lengths and the first wall where it is. Returns false if
+// the room isn't one that can be squared this way or the lengths can't meet.
+export function squareFromDiagonal(rooms, room, a, b, lengthM) {
+  const g = roomGeometry(rooms).get(room.id);
+  if (room.walls.length !== 4 || (room.anchor && room.anchor.shared) || !roomClosed(room, g)) return false;
+  if (Math.abs(a - b) !== 2) return false;
+  const L = room.walls.map((w) => w.lengthM);
+  const P = g.points.slice(0, 4);
+  // circle intersection: the point lengths r0 from c0 and r1 from c1, on the
+  // same side of c0→c1 as `like`
+  const meet = (c0, r0, c1, r1, like) => {
+    const d = Math.hypot(c1.x - c0.x, c1.y - c0.y);
+    if (d < 1e-6 || d > r0 + r1 + 1e-6 || d < Math.abs(r0 - r1) - 1e-6) return null;
+    const along = (r0 * r0 - r1 * r1 + d * d) / (2 * d);
+    const h = Math.sqrt(Math.max(r0 * r0 - along * along, 0));
+    const ux = (c1.x - c0.x) / d;
+    const uy = (c1.y - c0.y) / d;
+    const base = { x: c0.x + ux * along, y: c0.y + uy * along };
+    const side = Math.sign((c1.x - c0.x) * (like.y - c0.y) - (c1.y - c0.y) * (like.x - c0.x)) || 1;
+    return { x: base.x - uy * h * side, y: base.y + ux * h * side };
+  };
+  const pts = [P[0], P[1]];
+  if (a % 2 === 0) {
+    // diagonal from corner 0 to corner 2: corners 0 and 1 stay, 2 then 3 follow
+    pts[2] = meet(P[0], lengthM, P[1], L[1], P[2]);
+    if (!pts[2]) return false;
+    pts[3] = meet(pts[2], L[2], P[0], L[3], P[3]);
+  } else {
+    // diagonal from corner 1 to corner 3: corners 0 and 1 stay, 3 then 2 follow
+    pts[3] = meet(P[0], L[3], P[1], lengthM, P[3]);
+    if (!pts[3]) return false;
+    pts[2] = meet(P[1], L[1], pts[3], L[2], P[2]);
+  }
+  if (!pts[2] || !pts[3]) return false;
+  pts[4] = P[0];
+  setWallsThrough(room, g.frame, pts);
+  return true;
+}

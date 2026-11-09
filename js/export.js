@@ -20,6 +20,13 @@ function directionName(heading) {
   return square !== undefined ? names[square % 360] : `${a.toFixed(0)}° from up`;
 }
 
+function titleBlock(details = {}) {
+  const rows = [['Site address', details.address], ['Client', details.client], ['Measured by', details.measuredBy]]
+    .filter(([, v]) => v);
+  if (!rows.length) return '';
+  return `<table class="title-block"><tbody>${rows.map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`).join('')}</tbody></table>`;
+}
+
 // planEnds(idx, room) -> { start: 'left', end: 'right' } as used in the app's panels
 // wallName(idx, room) -> 'top' etc.; photoUrl(id) -> Promise of an image URL
 export async function exportPlan(job, { planEnds, wallName = (i) => `wall ${i + 1}`, photoUrl = null }) {
@@ -47,6 +54,7 @@ export async function exportPlan(job, { planEnds, wallName = (i) => `wall ${i + 
       room.ceilingHeightM ? `Ceiling ${fmt(room.ceilingHeightM)}` : null,
       wallAreas.wallsCounted || sharedArea ? `Wall area net ${area(wallAreas.net + sharedArea)}` : null,
       rm.roomClosed(room, g) ? null : 'Not closed',
+      room.diagonal ? `Diagonal measured ${fmt(room.diagonal.lengthM)} (plan ${fmt(rm.cornerDistance(rooms, room, room.diagonal.a, room.diagonal.b))})` : null,
     ].filter(Boolean).join(' · ');
     const sharedNote = span
       ? `<p class="room-summary">Shares ${esc(rm.roomLabel(span.host, span.hostIndex))} wall ${span.wallIdx + 1}: ` +
@@ -101,6 +109,7 @@ export async function exportPlan(job, { planEnds, wallName = (i) => `wall ${i + 
   view.innerHTML = `
     <h1>${esc(job.name)}</h1>
     <p class="print-meta">Site measure · ${date} · ${units.UNIT_LABELS[unit]}</p>
+    ${titleBlock(job.details)}
     <div class="print-plan"><svg viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet"></svg></div>
     ${measured.length > 1 ? `<p class="job-total">Total floor area ${area(totalArea)} (${measured.length} rooms)</p>` : ''}
     ${roomSections}`;

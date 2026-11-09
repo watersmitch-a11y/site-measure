@@ -11,7 +11,7 @@ import * as jobfile from './jobfile.js';
 import * as photos from './photos.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-const APP_VERSION = 31;
+const APP_VERSION = 32;
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -22,6 +22,7 @@ const state = {
   unit: 'mm',
   rooms: [rm.newRoom()],
   activeRoomId: null,
+  details: {}, // { address, client, measuredBy }
 };
 state.rooms[0].number = 1;
 state.activeRoomId = state.rooms[0].id;
@@ -86,7 +87,14 @@ const els = {
   unitSelect: $('#unitSelect'),
   jobsBtn: $('#jobsBtn'),
   newJobBtn: $('#newJobBtn'),
-  saveJobBtn: $('#saveJobBtn'),
+  saveState: $('#saveState'),
+  detailsPanel: $('#detailsPanel'),
+  spreadGapBtn: $('#spreadGapBtn'),
+  squareCheck: $('#squareCheck'),
+  diagFrom: $('#diagFrom'),
+  diagTo: $('#diagTo'),
+  diagResult: $('#diagResult'),
+  diagFixBtn: $('#diagFixBtn'),
   planSvg: $('#planSvg'),
   statsBar: $('#statsBar'),
   entryTitle: $('#entryTitle'),
@@ -474,8 +482,16 @@ function render() {
   updateMoveDims();
   renderStats();
   renderWallList();
-  els.closePolygonBtn.classList.toggle('hidden', ui.insertAt != null ||
-    state.walls.length < rm.minWallsToClose(activeRoom()) || rm.roomClosed(activeRoom(), geometryOf(activeRoom())));
+  const roomNow = activeRoom();
+  const closable = ui.insertAt == null && state.walls.length >= rm.minWallsToClose(roomNow) &&
+    !rm.roomClosed(roomNow, geometryOf(roomNow));
+  els.closePolygonBtn.classList.toggle('hidden', !closable);
+  // a small gap is usually measuring error: offer to share it out instead
+  // (even inside the 50 mm a room counts as closed by, so the plan meets up)
+  const gapNow = ui.insertAt == null ? rm.closingGap(roomNow, geometryOf(roomNow)) : null;
+  els.spreadGapBtn.classList.toggle('hidden', !(gapNow > 0.002 && state.walls.length >= rm.minWallsToClose(roomNow) + 1 &&
+    gapNow <= 0.05 * state.walls.reduce((sum, w) => sum + w.lengthM, 0)));
+  renderSquareCheck();
 }
 
 // ---------- plan view and zoom ----------
@@ -485,7 +501,8 @@ function drawPlan() {
   if (!viewBox && ui.view) viewBox = { x: ui.view.x, y: ui.view.y, width: ui.view.w, height: ui.view.w };
   renderPlan(els.planSvg, state.rooms, state.unit, {
     activeRoomId: state.activeRoomId,
-    selectedWallId: ui.panelWallId,
+    selectedWallId: ui.panelWallId || ui.locateWallId || ui.editingId,
+    movingIds: ui.moving ? ui.moving.groupIds : null,
     previewLine: previewLine(),
     gapDims: [...gapDims(), ...roomGaps()],
     viewBox,
@@ -578,6 +595,11 @@ function addPill(html, warn = false) {
   els.statsBar.appendChild(pill);
 }
 
+function sideName(i) {
+  const side = roomSide(i);
+  return `${side.charAt(0).toUpperCase()}${side.slice(1)} wall`;
+}
+
 function renderWallList() {
   els.wallList.innerHTML = '';
   if (state.walls.length === 0) {
@@ -603,9 +625,9 @@ function renderWallList() {
     if (wall.ceilingHeightM) extras.push(`ceiling ${units.formatLength(wall.ceilingHeightM, state.unit)}`);
     const warn = openings.some((o) => !op.fitsOnWall(wall, o)) ? ' <span class="warn-text">⚠ check openings</span>' : '';
     li.innerHTML = `
-      <div class="wall-idx">${i + 1}</div>
+      <button type="button" class="wall-idx" data-locate="${wall.id}" title="Show on the plan">${i + 1}</button>
       <div class="wall-info" data-id="${wall.id}">
-        <div class="wall-len">${units.formatLength(wall.lengthM, state.unit)}</div>
+        <div class="wall-len">${sideName(i)} · ${units.formatLength(wall.lengthM, state.unit)}</div>
         <div class="wall-dir">${extras.join(' · ')}${warn}</div>
         <div class="wall-hint">${openings.length ? 'Tap to edit openings' : 'Tap to add openings'} ›</div>
       </div>
@@ -635,7 +657,10 @@ function saveJob() {
     unit: state.unit,
     rooms: state.rooms,
     activeRoomId: state.activeRoomId,
+    details: state.details,
   });
+  const t = new Date().toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });
+  els.saveState.textContent = `Saved ✓ ${t}`;
 }
 
 // ---------- undo / redo ----------
@@ -644,7 +669,7 @@ function saveJob() {
 const history = { undo: [], redo: [], last: null };
 const HISTORY_MAX = 50;
 
-const jobSnapshot = () => JSON.stringify({ rooms: state.rooms, jobName: state.jobName, unit: state.unit });
+const jobSnapshot = () => JSON.stringify({ rooms: state.rooms, jobName: state.jobName, unit: state.unit, details: state.details });
 
 function resetHistory() {
   history.undo = [];
@@ -688,6 +713,7 @@ function stepHistory(from, to) {
   state.rooms = data.rooms;
   state.jobName = data.jobName;
   state.unit = data.unit;
+  state.details = data.details || {};
   state.activeRoomId = state.rooms.some((r) => r.id === target.activeRoomId) ? target.activeRoomId : state.rooms[0].id;
   stopPlacing();
   closeWallPanel();
@@ -886,8 +912,10 @@ async function handleNewJob() {
   closeWallPanel();
   resetEntryForm();
   buildCeilingInput();
+  state.details = { measuredBy: lastMeasuredBy() };
   resetHistory();
   render();
+  openDetails(); // a new job starts with its name and address
 }
 
 // Loads a saved job into state. Jobs saved before rooms existed had a single
@@ -896,6 +924,7 @@ function applyJob(job) {
   state.jobId = job.id;
   state.jobName = job.name;
   state.unit = job.unit || 'mm';
+  state.details = job.details || {};
   if (Array.isArray(job.rooms) && job.rooms.length > 0) {
     state.rooms = job.rooms;
   } else {
@@ -912,12 +941,6 @@ function applyJob(job) {
     : state.rooms[0].id;
 }
 
-function handleSaveJob() {
-  persist();
-  els.saveJobBtn.textContent = 'Saved!';
-  setTimeout(() => (els.saveJobBtn.textContent = 'Save'), 1000);
-  renderJobsPanel();
-}
 
 function handleLoadJob(id) {
   if (ui.moving) endMove(true);
@@ -1341,16 +1364,42 @@ async function handleDeleteOpening(id) {
 
 // ---------- rooms ----------
 
+// Room tabs with each room's floor area; past six rooms, a drop-down list.
 function renderRoomTabs() {
   els.roomTabs.innerHTML = '';
-  state.rooms.forEach((room, i) => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'room-tab' + (room.id === state.activeRoomId ? ' selected' : '');
-    btn.dataset.roomId = room.id;
-    btn.textContent = rm.roomLabel(room, i);
-    els.roomTabs.appendChild(btn);
-  });
+  const geom = rm.roomGeometry(state.rooms);
+  const areaOf = (room) => {
+    const a = rm.roomClosed(room, geom.get(room.id)) ? rm.roomArea(room, geom.get(room.id)) : null;
+    return a != null ? units.formatArea(a, state.unit) : '';
+  };
+  if (state.rooms.length > 6) {
+    const select = document.createElement('select');
+    select.className = 'room-select';
+    select.setAttribute('aria-label', 'Room');
+    state.rooms.forEach((room, i) => {
+      const opt = document.createElement('option');
+      opt.value = room.id;
+      opt.textContent = [rm.roomLabel(room, i), areaOf(room)].filter(Boolean).join(' · ');
+      opt.selected = room.id === state.activeRoomId;
+      select.appendChild(opt);
+    });
+    els.roomTabs.appendChild(select);
+  } else {
+    state.rooms.forEach((room, i) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'room-tab' + (room.id === state.activeRoomId ? ' selected' : '');
+      btn.dataset.roomId = room.id;
+      btn.textContent = rm.roomLabel(room, i);
+      const area = areaOf(room);
+      if (area) {
+        const small = document.createElement('small');
+        small.textContent = area;
+        btn.appendChild(small);
+      }
+      els.roomTabs.appendChild(btn);
+    });
+  }
   const add = document.createElement('button');
   add.type = 'button';
   add.className = 'room-tab add';
@@ -1485,6 +1534,134 @@ async function handleSeparateRoom() {
     'with its doors and windows, and they no longer move together.');
   if (!ok) return;
   rm.separateRoom(state.rooms, room);
+  persist();
+  render();
+}
+
+// ---------- job details, site mode ----------
+
+const MEASURED_BY_KEY = 'siteMeasure.measuredBy';
+function lastMeasuredBy() {
+  try { return localStorage.getItem(MEASURED_BY_KEY) || ''; } catch { return ''; }
+}
+
+function openDetails() {
+  $('#detailJobName').value = state.jobName === 'Untitled Job' ? '' : state.jobName;
+  $('#detailAddress').value = state.details.address || '';
+  $('#detailClient').value = state.details.client || '';
+  $('#detailMeasuredBy').value = state.details.measuredBy || '';
+  els.detailsPanel.classList.remove('hidden');
+}
+
+function closeDetails() {
+  const name = $('#detailJobName').value.trim();
+  const address = $('#detailAddress').value.trim();
+  state.jobName = name || address || 'Untitled Job';
+  state.details = {
+    address,
+    client: $('#detailClient').value.trim(),
+    measuredBy: $('#detailMeasuredBy').value.trim(),
+  };
+  try { localStorage.setItem(MEASURED_BY_KEY, state.details.measuredBy); } catch { /* not kept */ }
+  els.detailsPanel.classList.add('hidden');
+  persist();
+  render();
+}
+
+const SITE_MODE_KEY = 'siteMeasure.siteMode';
+function setSiteMode(on) {
+  document.body.classList.toggle('site-mode', on);
+  document.documentElement.classList.toggle('site-mode', on); // rem sizes scale up too
+  $('#siteModeBtn').classList.toggle('selected', on);
+  try { localStorage.setItem(SITE_MODE_KEY, on ? '1' : ''); } catch { /* not kept */ }
+}
+
+// ---------- spreading a closing gap, squareness check ----------
+
+async function handleSpreadGap() {
+  const room = activeRoom();
+  const gap = rm.closingGap(room, geometryOf(room));
+  const change = rm.spreadClosingGap(state.rooms, room, false);
+  if (change == null) return;
+  const ok = await showConfirm(`Share the ${units.formatLength(gap, state.unit)} gap out over all the walls? ` +
+    `No wall changes by more than ${units.formatLength(change, state.unit)}, and the corners turn slightly.`);
+  if (!ok) return;
+  rm.spreadClosingGap(state.rooms, room);
+  persist();
+  render();
+}
+
+function renderSquareCheck() {
+  const room = activeRoom();
+  const n = room.walls.length;
+  const show = n >= 3 && rm.roomClosed(room, geometryOf(room));
+  els.squareCheck.classList.toggle('hidden', !show);
+  if (!show) return;
+  const names = rm.cornerNames(state.rooms, room);
+  const key = names.join('|');
+  if (els.squareCheck.dataset.key !== `${room.id}|${key}`) {
+    els.squareCheck.dataset.key = `${room.id}|${key}`;
+    [els.diagFrom, els.diagTo].forEach((sel, which) => {
+      sel.innerHTML = '';
+      names.forEach((name, k) => {
+        const opt = document.createElement('option');
+        opt.value = k;
+        opt.textContent = name;
+        sel.appendChild(opt);
+      });
+      sel.value = which === 0 ? 0 : Math.min(2, n - 1);
+    });
+    if (!$('#diagInputs').children.length || els.squareCheck.dataset.unit !== state.unit) {
+      buildLengthInput($('#diagInputs'), state.unit, 'diag', 'Measured diagonal');
+      els.squareCheck.dataset.unit = state.unit;
+    }
+    const d = room.diagonal;
+    if (d) {
+      els.diagFrom.value = d.a;
+      els.diagTo.value = d.b;
+      setLength(state.unit, 'diag', d.lengthM);
+    } else {
+      setLength(state.unit, 'diag', null);
+    }
+    els.diagResult.classList.add('hidden');
+    els.diagFixBtn.classList.add('hidden');
+  }
+}
+
+function handleDiagCheck() {
+  const room = activeRoom();
+  const a = Number(els.diagFrom.value);
+  const b = Number(els.diagTo.value);
+  const measured = readLength(state.unit, 'diag');
+  if (a === b || measured == null) {
+    els.diagResult.textContent = 'Pick two different corners and enter the measured diagonal.';
+    els.diagResult.classList.remove('hidden');
+    return;
+  }
+  const plan = rm.cornerDistance(state.rooms, room, a, b);
+  const off = measured - plan;
+  const fmt = (m) => units.formatLength(m, state.unit);
+  const square = Math.abs(off) <= 0.01;
+  els.diagResult.textContent = `Plan ${fmt(plan)} · measured ${fmt(measured)} · ` +
+    (square ? 'within 10 mm, the room is as drawn ✓' : `${fmt(Math.abs(off))} ${off > 0 ? 'longer' : 'shorter'} than the plan`);
+  els.diagResult.classList.remove('hidden');
+  room.diagonal = { a, b, lengthM: measured, planM: plan };
+  const fixable = !square && room.walls.length === 4 && Math.abs(a - b) === 2 && !(room.anchor && room.anchor.shared);
+  els.diagFixBtn.classList.toggle('hidden', !fixable);
+  persist();
+}
+
+function handleDiagFix() {
+  const room = activeRoom();
+  const d = room.diagonal;
+  if (!d) return;
+  if (!rm.squareFromDiagonal(state.rooms, room, d.a, d.b, d.lengthM)) {
+    els.diagResult.textContent = "Those lengths can't make a four-sided room; check the walls and the diagonal.";
+    return;
+  }
+  room.diagonal.planM = rm.cornerDistance(state.rooms, room, d.a, d.b);
+  els.diagResult.textContent = 'Corners adjusted so the plan matches the diagonal ✓';
+  els.diagFixBtn.classList.add('hidden');
   persist();
   render();
 }
@@ -2115,13 +2292,14 @@ els.undoActionBtn.addEventListener('click', undo);
 els.redoActionBtn.addEventListener('click', redo);
 els.closePolygonBtn.addEventListener('click', handleClosePolygon);
 els.newJobBtn.addEventListener('click', handleNewJob);
-els.saveJobBtn.addEventListener('click', handleSaveJob);
 els.exportBtn.addEventListener('click', () => {
   els.exportError.classList.add('hidden');
   els.exportPanel.classList.remove('hidden');
 });
 const closeExport = () => els.exportPanel.classList.add('hidden');
-const currentJob = () => ({ id: state.jobId, name: state.jobName, unit: state.unit, rooms: state.rooms, activeRoomId: state.activeRoomId });
+const currentJob = () => ({
+  id: state.jobId, name: state.jobName, unit: state.unit, rooms: state.rooms, activeRoomId: state.activeRoomId, details: state.details,
+});
 function exportFailed(message) {
   els.exportError.textContent = message;
   els.exportError.classList.remove('hidden');
@@ -2180,6 +2358,16 @@ els.wallList.addEventListener('click', (e) => {
   const editBtn = e.target.closest('.edit-btn');
   const delBtn = e.target.closest('.delete-btn');
   const info = e.target.closest('.wall-info');
+  const locate = e.target.closest('[data-locate]');
+  if (locate) {
+    // light the wall up on the plan for a moment
+    ui.locateWallId = locate.dataset.locate;
+    drawPlan();
+    els.planWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    clearTimeout(ui.locateTimer);
+    ui.locateTimer = setTimeout(() => { ui.locateWallId = null; drawPlan(); }, 2500);
+    return;
+  }
   if (editBtn) handleEditWall(editBtn.dataset.id);
   else if (delBtn) handleDeleteWall(delBtn.dataset.id);
   else if (info) openWallPanel(info.dataset.id);
@@ -2450,6 +2638,9 @@ els.openingList.addEventListener('click', (e) => {
   if (delBtn) handleDeleteOpening(delBtn.dataset.opId);
 });
 
+els.roomTabs.addEventListener('change', (e) => {
+  if (e.target.matches('.room-select')) setActiveRoom(e.target.value);
+});
 els.roomTabs.addEventListener('click', (e) => {
   const btn = e.target.closest('.room-tab');
   if (!btn) return;
@@ -2491,6 +2682,14 @@ els.createRoomBtn.addEventListener('click', handleCreateRoom);
 els.moveRoomBtn.addEventListener('click', startMove);
 els.separateRoomBtn.addEventListener('click', handleSeparateRoom);
 els.breakWallBtn.addEventListener('click', handleBreakWall);
+els.spreadGapBtn.addEventListener('click', handleSpreadGap);
+$('#diagCheckBtn').addEventListener('click', handleDiagCheck);
+els.diagFixBtn.addEventListener('click', handleDiagFix);
+$('#detailsBtn').addEventListener('click', openDetails);
+$('#doneDetailsBtn').addEventListener('click', closeDetails);
+$('#closeDetailsBtn').addEventListener('click', closeDetails);
+els.detailsPanel.addEventListener('click', (e) => { if (e.target === els.detailsPanel) closeDetails(); });
+$('#siteModeBtn').addEventListener('click', () => setSiteMode(!document.body.classList.contains('site-mode')));
 $('#roomPhotoInput').addEventListener('change', (e) => {
   const file = e.target.files[0];
   e.target.value = '';
@@ -2587,6 +2786,7 @@ function init() {
   render();
 
   els.appVersion.textContent = `Site Measure v${APP_VERSION}`;
+  try { setSiteMode(localStorage.getItem(SITE_MODE_KEY) === '1'); } catch { /* default look */ }
   registerServiceWorker();
 }
 

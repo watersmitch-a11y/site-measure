@@ -746,3 +746,50 @@ main {
 .print-photos img { width: 100%; max-height: 90mm; object-fit: contain; }
 .print-photos figcaption { font-size: 9pt; color: #444; margin-top: 1mm; }
 #photoViewer, #exportPanel { z-index: 60; }
+
+/* ---------- v32: on-site use ---------- */
+.save-state { font-size: 0.75rem; color: var(--text-dim); text-align: right; min-height: 1em; margin-top: 0.15rem; }
+.room-tab small { display: block; font-size: 0.68rem; opacity: 0.75; font-weight: 400; }
+.room-select { flex: 1; min-width: 0; padding: 0.55rem 0.6rem; border-radius: var(--radius); border: 1px solid var(--accent); background: var(--surface-2); color: var(--text); font-size: 1rem; }
+button.wall-idx { border: none; font: inherit; cursor: pointer; }
+.room-extra { margin: 0.6rem 0; border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem 0.7rem; }
+.room-extra summary { cursor: pointer; color: var(--text-dim); font-size: 0.9rem; }
+.room-extra[open] summary { margin-bottom: 0.5rem; }
+.diag-row { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.5rem; }
+.diag-row .panel-select { flex: 1; min-width: 0; }
+.plan-room.moving { opacity: 0.85; }
+.plan-room.moving .plan-band { fill: var(--accent); stroke: var(--accent); }
+#detailsPanel { z-index: 60; }
+.title-block { border-collapse: collapse; margin: 2mm 0 4mm; font-size: 10pt; }
+.title-block th { text-align: left; padding: 0.5mm 4mm 0.5mm 0; color: #555; font-weight: 600; }
+.title-block td { padding: 0.5mm 0; }
+#siteModeBtn.selected { color: var(--accent); border-color: var(--accent); }
+
+/* Site mode: bigger controls and a light theme that reads in sunlight */
+body.site-mode {
+  --bg: #f3f4f6;
+  --surface: #ffffff;
+  --surface-2: #e9ecef;
+  --border: #9aa5b1;
+  --text: #0d1117;
+  --text-dim: #3d4752;
+  --accent: #c25e00;
+  --accent-dim: #ffe2bf;
+  --green: #127a3c;
+  --red: #c0271a;
+  --opening: #0b63c9;
+  --input-bg: #ffffff;
+}
+html.site-mode { font-size: 18px;
+}
+body.site-mode .plan-room.dim { opacity: 0.55; }
+body.site-mode .pad-btn, body.site-mode .primary-btn, body.site-mode .secondary-btn { min-height: 3.2rem; }
+.job-name-input { min-width: 0; text-overflow: ellipsis; }
+.job-row { gap: 0.3rem; }
+.job-row .icon-btn { flex: 0 0 auto; width: 38px; height: 38px; font-size: 1rem; }
+.job-row .icon-btn + .icon-btn { margin-left: 0; }
+.unit-row .text-btn { white-space: nowrap; }
+.unit-row select { min-width: 0; flex: 0 1 auto; }
+.unit-row { flex-wrap: wrap; row-gap: 0.3rem; }
+.unit-row label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+.unit-row select { min-width: 7.5rem; }

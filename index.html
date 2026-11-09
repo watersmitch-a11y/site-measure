@@ -19,6 +19,7 @@
   <header class="app-header">
     <div class="job-row">
       <input id="jobName" class="job-name-input" type="text" value="Untitled Job" aria-label="Job name" />
+      <button id="siteModeBtn" class="icon-btn" title="Site mode: bigger and brighter for outdoors" aria-label="Site mode">&#9728;</button>
       <button id="undoActionBtn" class="icon-btn" title="Undo" aria-label="Undo" disabled>&#8630;</button>
       <button id="redoActionBtn" class="icon-btn" title="Redo" aria-label="Redo" disabled>&#8631;</button>
       <button id="jobsBtn" class="icon-btn" title="Jobs">&#128193;</button>
@@ -32,9 +33,10 @@
         <option value="m">Metres</option>
       </select>
       <button id="newJobBtn" class="text-btn">New Job</button>
-      <button id="saveJobBtn" class="text-btn">Save</button>
+      <button id="detailsBtn" class="text-btn">Details</button>
       <button id="exportBtn" class="text-btn">Export</button>
     </div>
+    <div id="saveState" class="save-state"></div>
   </header>
 
   <main>
@@ -149,6 +151,7 @@
       </div>
       <ul id="wallList" class="wall-list"></ul>
       <button id="closePolygonBtn" class="secondary-btn hidden">Complete Perimeter (Close Shape)</button>
+      <button id="spreadGapBtn" type="button" class="secondary-btn hidden">Spread the gap across the walls</button>
       <button id="finishInsertBtn" type="button" class="secondary-btn hidden">Finish inserting walls</button>
     </section>
 
@@ -162,6 +165,20 @@
       <div id="roomAnchorNote" class="anchor-note hidden"></div>
       <div class="field-label">Ceiling height</div>
       <div id="ceilingInputs" class="length-inputs"></div>
+      <details id="squareCheck" class="room-extra hidden">
+        <summary>Squareness check (diagonal)</summary>
+        <div class="diag-row">
+          <select id="diagFrom" class="panel-select"></select>
+          <span>to</span>
+          <select id="diagTo" class="panel-select"></select>
+        </div>
+        <div id="diagInputs" class="length-inputs"></div>
+        <p id="diagResult" class="anchor-note hidden"></p>
+        <div class="confirm-actions">
+          <button id="diagCheckBtn" type="button" class="secondary-btn">Check</button>
+          <button id="diagFixBtn" type="button" class="secondary-btn hidden">Correct the plan</button>
+        </div>
+      </details>
       <div class="field-label">Photos</div>
       <div id="roomPhotos" class="photo-strip"></div>
       <label class="secondary-btn photo-add">+ Photo of this room
@@ -183,6 +200,25 @@
         <input id="importJobInput" type="file" accept=".json,application/json" class="hidden" />
       </div>
       <p class="anchor-note">Job files hold the whole job and its photos. Use Export → Job file to back a job up or send it to the office.</p>
+    </div>
+  </div>
+
+  <div id="detailsPanel" class="jobs-panel hidden">
+    <div class="jobs-panel-inner">
+      <div class="jobs-panel-header">
+        <h2>Job details</h2>
+        <button id="closeDetailsBtn" class="icon-btn">&times;</button>
+      </div>
+      <div class="field-label">Job name</div>
+      <input id="detailJobName" type="text" class="panel-input" />
+      <div class="field-label">Site address</div>
+      <input id="detailAddress" type="text" class="panel-input" autocomplete="street-address" />
+      <div class="field-label">Client</div>
+      <input id="detailClient" type="text" class="panel-input" />
+      <div class="field-label">Measured by</div>
+      <input id="detailMeasuredBy" type="text" class="panel-input" />
+      <p class="anchor-note">These go in the title block of the PDF. "Measured by" is remembered for new jobs.</p>
+      <button id="doneDetailsBtn" type="button" class="primary-btn">Done</button>
     </div>
   </div>
 
