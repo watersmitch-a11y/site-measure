@@ -13,7 +13,7 @@ import * as fx from './fixtures.js';
 import * as laser from './laser.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-const APP_VERSION = 33;
+const APP_VERSION = 34;
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -824,6 +824,12 @@ function handleAddWall() {
   }
 
   if (editIdx >= 0) {
+    const problem = wallFitProblem(state.walls[editIdx], lengthM);
+    if (problem) {
+      flashInvalid();
+      showAlert(problem);
+      return;
+    }
     // keep the walls after this one pointing the same way on the plan
     const before = wallHeadings();
     state.walls[editIdx] = { ...state.walls[editIdx], lengthM, angle };
@@ -1265,6 +1271,19 @@ function fillKeepClosed() {
   }
 }
 
+// Why a wall can't take a new length: a door, window or fixture on it would
+// run past its end. null if it's fine.
+function wallFitProblem(wall, lengthM) {
+  const trial = { ...wall, lengthM };
+  const opTags = op.openingTags(allWalls());
+  const badOpening = (wall.openings || []).find((o) => op.fitsOnWall(wall, o) && !op.fitsOnWall(trial, o));
+  if (badOpening) return `${opTags[badOpening.id]} would run past the end of the wall at that length; move or resize it first.`;
+  const fxTags = fx.fixtureTags(allWalls());
+  const badFixture = (wall.fixtures || []).find((f) => fx.fixtureFits(wall, f) && !fx.fixtureFits(trial, f));
+  if (badFixture) return `${fxTags[badFixture.id]} would be past the end of the wall at that length; move it first.`;
+  return null;
+}
+
 function handleUpdateLength() {
   const room = activeRoom();
   const idx = state.walls.findIndex((w) => w.id === ui.panelWallId);
@@ -1283,6 +1302,9 @@ function handleUpdateLength() {
   if (partner && partner.w.lengthM + partner.sign * delta < 0.01) {
     return showError(`That would make the ${roomSide(partner.j, room)} wall too short; pick another wall to change.`);
   }
+  const problem = wallFitProblem(wall, newLen) ||
+    (partner && wallFitProblem(partner.w, partner.w.lengthM + partner.sign * delta));
+  if (problem) return showError(problem);
   wall.lengthM = newLen;
   if (partner) partner.w.lengthM += partner.sign * delta;
   settleSharedStart(room);

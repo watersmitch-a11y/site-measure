@@ -203,7 +203,27 @@ export function sharedWallSpan(hostPoints, hostWalls, wallIdx, side, thicknessM,
 // is the point the room closes onto (its start, or for a shared-wall room the
 // near end of the shared wall). Hosts always come before the rooms attached
 // to them, so one pass in order works.
-export function roomGeometry(rooms) {
+// The plan is redrawn often (every drag frame) and asks for the same rooms'
+// geometry and wall merges many times over; work each out once per change.
+// Callers must treat the results as read-only.
+function lastResult(fn, keyOf) {
+  let lastKey = null;
+  let last = null;
+  return (...args) => {
+    const key = keyOf(...args);
+    if (key !== lastKey) {
+      last = fn(...args);
+      lastKey = key;
+    }
+    return last;
+  };
+}
+
+const geometryKey = (rooms) => JSON.stringify(rooms.map((r) => [r.id, r.anchor, r.walls.map((w) => [w.id, w.lengthM, w.angle])]));
+
+export const roomGeometry = lastResult(computeGeometry, geometryKey);
+
+function computeGeometry(rooms) {
   const geom = new Map();
   rooms.forEach((room) => {
     const anchor = room.anchor;
@@ -444,7 +464,10 @@ function facingOverlap(A, B, minGap, maxGap) {
 //   extras:  'roomId|wallIdx' -> [{ opening, startM, endM, fromRoomId }]  the other room's
 //            openings in a shared stretch, along the owner wall (only ones the owner lacks)
 //   sameAs:  opening id -> { roomId, openingId }  a doorway the owner already has
-export function wallMerges(rooms, geom, maxGap = 0.3) {
+export const wallMerges = lastResult(computeMerges, (rooms, geom, maxGap = 0.3) =>
+  `${maxGap}|${geometryKey(rooms)}|${JSON.stringify(rooms.map((r) => r.walls.map((w) => [w.openings, w.thicknessM])))}`);
+
+function computeMerges(rooms, geom, maxGap = 0.3) {
   const merges = { hidden: new Map(), shared: new Map(), extras: new Map(), sameAs: new Map() };
   const push = (map, key, item) => {
     if (!map.has(key)) map.set(key, []);

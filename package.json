@@ -1,0 +1,11 @@
+{
+  "name": "site-measure",
+  "private": true,
+  "description": "Phone-first site measuring app (static PWA, no build step). npm is only used to run the tests.",
+  "scripts": {
+    "test": "node tests/run.js"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

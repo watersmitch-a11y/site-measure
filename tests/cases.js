@@ -1,0 +1,401 @@
+// The test cases run by tests/run.js. Each gets { page, context, base, tmp, assert }.
+
+const fs = require('fs');
+const path = require('path');
+
+// A rectangular room's walls, walked from its bottom-left corner: up, right,
+// down, left. Ids are prefix + a/b/c/d.
+const rect = (id, w, h, openings = {}) => ['a', 'b', 'c', 'd'].map((k, i) => ({
+  id: id + k,
+  lengthM: i % 2 === 0 ? h : w,
+  angle: i === 0 ? 0 : 90,
+  openings: openings[k] || [],
+}));
+
+const door = (id, offsetM, extra = {}) => ({
+  id, type: 'door', measuredTo: 'plaster', fromCorner: 'start', offsetM, widthM: 0.82, heightM: 2.04, sillM: 0, hinge: 'left', swing: 'in', note: '', ...extra,
+});
+
+async function loadJob(page, job) {
+  await page.evaluate((j) => {
+    const full = { id: 'job', name: 'Test', unit: 'mm', activeRoomId: j.rooms[0].id, ...j, updatedAt: new Date().toISOString() };
+    localStorage.clear();
+    localStorage.setItem(`siteMeasure.job.${full.id}`, JSON.stringify(full));
+    localStorage.setItem('siteMeasure.jobIndex', JSON.stringify([{ id: full.id, name: full.name, updatedAt: full.updatedAt }]));
+  }, job);
+  await page.reload();
+}
+
+const saved = (page) => page.evaluate(() => {
+  const idx = JSON.parse(localStorage.getItem('siteMeasure.jobIndex'));
+  const latest = [...idx].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0];
+  return JSON.parse(localStorage.getItem(`siteMeasure.job.${latest.id}`));
+});
+
+async function addWall(page, heading, mm) {
+  await page.click(`#dirPad .pad-btn[data-heading="${heading}"]`);
+  await page.fill('#lenSingle', String(mm));
+  await page.click('#addWallBtn');
+}
+
+async function tapWall(page, wallId) {
+  await page.$eval('#planSvg', (e) => e.scrollIntoView({ block: 'center' }));
+  const box = await page.$eval(`.plan-hit[data-wall-id="${wallId}"]`, (l) => {
+    const r = l.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  await page.mouse.click(box.x, box.y);
+  await page.waitForSelector('#wallPanel:not(.hidden)');
+}
+
+const texts = (page, sel) => page.$$eval(sel, (els) => els.map((e) => e.textContent.trim()));
+const mmOf = (m) => Math.round(m * 1000);
+const confirm = (page) => page.click('.confirm-ok');
+
+const tests = [
+  {
+    name: 'every room draws when one room has no walls yet',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [
+        { id: 'r1', number: 1, walls: rect('r1', 4, 3), anchor: null },
+        { id: 'r2', number: 2, walls: [], anchor: { type: 'fixed', x: 6, y: 0, heading: null } },
+        { id: 'r3', number: 3, walls: rect('r3', 2, 2), anchor: { type: 'fixed', x: 9, y: 0, heading: null } },
+      ], activeRoomId: 'r3' });
+      const names = await texts(page, '.plan-room-name');
+      assert.ok(names.includes('Room 1') && names.includes('Room 3'), `room names drawn: ${names}`);
+      assert.match(await page.textContent('#statsBar'), /4\.0 m²/);
+    },
+  },
+  {
+    name: 'gap to the next room is dimensioned and fills the length',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [
+        { id: 'r1', number: 1, walls: rect('r1', 6, 4), anchor: null },
+        { id: 'r3', number: 2, walls: rect('r3', 3, 4), anchor: { type: 'fixed', x: 8.5, y: 0, heading: null } },
+        { id: 'r8', number: 3, walls: [], anchor: { type: 'fixed', x: 6.11, y: 0, heading: null } },
+      ], activeRoomId: 'r8' });
+      assert.deepEqual(await texts(page, '.plan-dim-label'), ['2280 mm']);
+      await addWall(page, 0, 4000);
+      await page.click('#dirPad .pad-btn[data-heading="90"]');
+      const chips = await texts(page, '#matchChips .chip');
+      assert.ok(chips.some((c) => c.includes('to Room 2') && c.includes('2280')), `chips: ${chips}`);
+      await page.click('#matchChips .chip >> nth=-1');
+      assert.equal(await page.inputValue('#lenSingle'), '2280');
+    },
+  },
+  {
+    name: 'gaps between neighbouring rooms show around a shared-wall room',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [
+        { id: 'r1', number: 1, walls: rect('r1', 8, 3), anchor: null },
+        { id: 'r2', number: 2, walls: rect('r2', 2, 2.5), anchor: { type: 'fixed', x: 0, y: -3.22, heading: null } },
+        { id: 'r3', number: 3, walls: rect('r3', 3.18, 3), anchor: { type: 'fixed', x: 2.9, y: -5, heading: null } },
+        { id: 'r8', number: 4, walls: [], anchor: { type: 'wall', shared: true, roomId: 'r3', wallId: 'r3d', offsetM: 0, lengthM: 3.18, thicknessM: 0.11, side: -1, reversed: true } },
+      ], activeRoomId: 'r8' });
+      const dims = await texts(page, '.plan-dim-label');
+      assert.ok(dims.includes('1780 mm') && dims.includes('680 mm'), `dims: ${dims}`);
+    },
+  },
+  {
+    name: 'a shared-wall room wider or narrower than the stretch still closes',
+    async run({ page, assert }) {
+      for (const [width, walls, shared] of [[4000, 4, 3180], [2500, 3, 2500]]) {
+        await loadJob(page, { rooms: [
+          { id: 'r1', number: 1, walls: rect('r1', 8, 3), anchor: null },
+          { id: 'r3', number: 2, walls: rect('r3', 3.18, 3), anchor: { type: 'fixed', x: 2.9, y: -5, heading: null } },
+          { id: 'r8', number: 3, walls: [], anchor: { type: 'wall', shared: true, roomId: 'r3', wallId: 'r3d', offsetM: 0, lengthM: 3.18, thicknessM: 0.11, side: -1, reversed: true } },
+        ], activeRoomId: 'r8' });
+        await addWall(page, 180, 1780);
+        await addWall(page, 270, width);
+        await addWall(page, 0, 1780);
+        const r8 = (await saved(page)).rooms.find((r) => r.id === 'r8');
+        assert.equal(r8.walls.length, walls, `walls for ${width}`);
+        assert.equal(mmOf(r8.anchor.lengthM), shared);
+        assert.match(await page.textContent('#statsBar'), /Closed ✓/);
+      }
+    },
+  },
+  {
+    name: 'moving a joined room moves its group; cancel puts it back; separate frees it',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [
+        { id: 'r1', number: 1, walls: rect('r1', 8, 3), anchor: null },
+        { id: 'r3', number: 2, walls: rect('r3', 3.18, 3, { d: [door('d1', 1)] }), anchor: { type: 'fixed', x: 2.9, y: -5, heading: null } },
+        { id: 'r8', number: 3, walls: [], anchor: { type: 'wall', shared: true, roomId: 'r3', wallId: 'r3d', offsetM: 0, lengthM: 3.18, thicknessM: 0.11, side: -1, reversed: true } },
+        { id: 'r9', number: 4, walls: rect('r9', 2, 2), anchor: { type: 'fixed', x: 12, y: -8, heading: null } },
+      ], activeRoomId: 'r8' });
+      await addWall(page, 180, 1780); await addWall(page, 270, 3180); await addWall(page, 0, 1780);
+      await page.click('#moveRoomBtn');
+      assert.match(await page.textContent('#moveTitle'), /with Room 1, Room 2 \(joined\)/);
+      await page.click('#nudgePad button[data-dx="1"]');
+      await page.click('#doneMoveBtn');
+      let j = await saved(page);
+      const x = (id) => j.rooms.find((r) => r.id === id).anchor.x;
+      assert.equal(x('r1'), 0.1);
+      assert.equal(x('r3'), 3);
+      assert.equal(x('r9'), 12);
+      const before = JSON.stringify(j.rooms.map((r) => r.anchor));
+      await page.click('#moveRoomBtn');
+      await page.click('#rotateRightBtn');
+      await page.click('#cancelMoveBtn');
+      j = await saved(page);
+      assert.equal(JSON.stringify(j.rooms.map((r) => r.anchor)), before);
+      await page.click('#separateRoomBtn');
+      await confirm(page);
+      j = await saved(page);
+      const r8 = j.rooms.find((r) => r.id === 'r8');
+      assert.equal(r8.anchor.type, 'fixed');
+      assert.deepEqual(r8.walls.map((w) => mmOf(w.lengthM)), [1780, 3180, 1780, 3180]);
+      assert.deepEqual(r8.walls[3].openings.map((o) => [mmOf(o.offsetM), o.hinge, o.swing]), [[1360, 'right', 'out']]);
+      await page.click('#moveRoomBtn');
+      assert.doesNotMatch(await page.textContent('#moveTitle'), /joined/);
+      await page.click('#cancelMoveBtn');
+    },
+  },
+  {
+    name: 'breaking a wall and inserting a nib keeps the room closed',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 8, 3), anchor: null }] });
+      await tapWall(page, 'r1b');
+      await page.selectOption('#breakEndSelect', { index: 0 });
+      await page.fill('#breakAtSingle', '2000');
+      await page.click('#breakWallBtn');
+      assert.match(await page.textContent('#entryTitle'), /Inserting a wall after Wall 2/);
+      await addWall(page, 0, 300); await addWall(page, 90, 1000); await addWall(page, 180, 300);
+      await page.click('#finishInsertBtn');
+      const r1 = (await saved(page)).rooms[0];
+      assert.deepEqual(r1.walls.map((w) => mmOf(w.lengthM)), [3000, 2000, 300, 1000, 300, 5000, 3000, 8000]);
+      assert.match(await page.textContent('#statsBar'), /24\.3 m².*Closed ✓/);
+    },
+  },
+  {
+    name: 'room numbers stay put; undo and redo step through changes',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [
+        { id: 'r1', walls: rect('r1', 4, 3), anchor: null },
+        { id: 'r2', name: 'Kitchen', walls: rect('r2', 3, 3), anchor: { type: 'fixed', x: 4.11, y: 0, heading: null } },
+        { id: 'r3', walls: rect('r3', 2, 2), anchor: { type: 'fixed', x: 10, y: 0, heading: null } },
+      ] });
+      const tabs = () => page.$$eval('#roomTabs .room-tab:not(.add)', (b) => b.map((x) => x.firstChild.textContent));
+      assert.deepEqual(await tabs(), ['Room 1', 'Kitchen', 'Room 3']);
+      await page.click('#deleteRoomBtn');
+      await confirm(page);
+      assert.deepEqual(await tabs(), ['Kitchen', 'Room 3']);
+      await page.click('#undoActionBtn');
+      assert.deepEqual(await tabs(), ['Room 1', 'Kitchen', 'Room 3']);
+      await page.click('#redoActionBtn');
+      assert.deepEqual(await tabs(), ['Kitchen', 'Room 3']);
+      await page.click('#undoActionBtn');
+      assert.equal(await page.$eval('#undoActionBtn', (b) => b.disabled), true);
+    },
+  },
+  {
+    name: 'wall thickness, photos, PDF, DXF and job file round trip',
+    async run({ page, browser, tmp, base, assert }) {
+      await loadJob(page, { name: 'Test/Job', rooms: [
+        { id: 'r1', walls: rect('r1', 4, 3, { b: [door('d1', 0.5)] }), anchor: null },
+        { id: 'r2', name: 'Kitchen', walls: rect('r2', 3, 3), anchor: { type: 'fixed', x: 4.11, y: 0, heading: null } },
+      ] });
+      await tapWall(page, 'r1a');
+      await page.click('#wallThickChips .chip[data-mm="230"]');
+      assert.equal((await saved(page)).rooms[0].walls[0].thicknessM, 0.23);
+      const png = path.join(tmp, 'tiny.png');
+      fs.writeFileSync(png, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAFWEXHbQSACj/P8Fu7N9hAAAAAElFTkSuQmCC', 'base64'));
+      await page.setInputFiles('#wallPhotoInput', png);
+      await page.waitForSelector('#photoViewer:not(.hidden)');
+      await page.fill('#photoNote', 'cracked plaster');
+      await page.click('#donePhotoBtn');
+      await page.click('#closeWallPanelBtn');
+      assert.deepEqual((await saved(page)).rooms[0].photos.map((p) => p.note), ['cracked plaster']);
+
+      await page.click('#exportBtn');
+      await page.click('#exportPdfBtn');
+      await page.waitForFunction(() => window.__printed === 1);
+      assert.equal((await page.$$('#printView .print-photos img')).length, 1);
+      assert.match(await page.textContent('#printView'), /230 mm wall/);
+
+      await page.click('#exportBtn');
+      const [dxf] = await Promise.all([page.waitForEvent('download'), page.click('#exportDxfBtn')]);
+      assert.equal(dxf.suggestedFilename(), 'Test-Job.dxf');
+      const text = fs.readFileSync(await dxf.path(), 'utf8').split('\r\n');
+      assert.equal(text.length % 2, 1, 'group codes come in pairs'); // plus the trailing newline
+      const values = text.filter((_, i) => i % 2 === 1);
+      assert.equal(values[values.length - 1], 'EOF');
+      assert.ok(values.filter((v) => v === 'POLYLINE').length >= 8 && values.includes('ARC'), 'walls and door swing in the DXF');
+
+      await page.click('#exportBtn');
+      const [jf] = await Promise.all([page.waitForEvent('download'), page.click('#exportJobBtn')]);
+      const file = path.join(tmp, 'job.json');
+      await jf.saveAs(file);
+      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assert.equal(data.format, 'site-measure-job');
+      assert.equal(Object.keys(data.photos).length, 1);
+
+      const other = await (await browser.newContext({ viewport: { width: 412, height: 915 }, serviceWorkers: 'block' })).newPage();
+      await other.goto(base);
+      await other.click('#jobsBtn');
+      await other.setInputFiles('#importJobInput', file);
+      await other.waitForFunction(() => document.querySelector('#jobName').value === 'Test/Job');
+      await other.waitForSelector('#roomPhotos .photo-thumb img[src^="blob:"]');
+      await other.context().close();
+    },
+  },
+  {
+    name: 'spreading a closing gap and squaring from a diagonal',
+    async run({ page, assert }) {
+      await page.evaluate(() => localStorage.clear());
+      await page.reload();
+      await addWall(page, 0, 3000); await addWall(page, 90, 4000); await addWall(page, 180, 3030); await addWall(page, 270, 4000);
+      await page.click('#spreadGapBtn');
+      assert.match(await page.textContent('.confirm-message'), /30 mm gap/);
+      await confirm(page);
+      let walls = (await saved(page)).rooms[0].walls;
+      assert.deepEqual(walls.map((w) => mmOf(w.lengthM)), [3006, 4000, 3024, 4000]);
+      await page.click('#squareCheck summary');
+      await page.selectOption('#diagFrom', '0');
+      await page.selectOption('#diagTo', '2');
+      await page.fill('#diagSingle', '5040');
+      await page.click('#diagCheckBtn');
+      assert.match(await page.textContent('#diagResult'), /longer than the plan/);
+      await page.click('#diagFixBtn');
+      walls = (await saved(page)).rooms[0].walls;
+      assert.deepEqual(walls.map((w) => mmOf(w.lengthM)), [3006, 4000, 3024, 4000]);
+      const job = await saved(page);
+      assert.ok(Math.abs(job.rooms[0].diagonal.planM - 5.04) < 0.002, `diagonal now ${job.rooms[0].diagonal.planM}`);
+    },
+  },
+  {
+    name: 'job details, room picker and site mode',
+    async run({ page, assert }) {
+      await page.evaluate(() => localStorage.clear());
+      await page.reload();
+      await page.click('#newJobBtn');
+      await page.waitForSelector('#detailsPanel:not(.hidden)');
+      await page.fill('#detailAddress', '12 Smith St, Fitzroy VIC 3065');
+      await page.fill('#detailClient', 'Acme Aged Care');
+      await page.click('#doneDetailsBtn');
+      assert.equal(await page.inputValue('#jobName'), '12 Smith St, Fitzroy VIC 3065');
+      assert.match(await page.textContent('#saveState'), /Saved ✓/);
+      const job = await saved(page);
+      await loadJob(page, { ...job, rooms: [...job.rooms, ...[2, 3, 4, 5, 6, 7].map((n) => ({ id: `x${n}`, number: n, walls: [], anchor: { type: 'fixed', x: n * 3, y: 0, heading: null } }))] });
+      assert.equal((await page.$$('.room-select option')).length, 7);
+      await page.selectOption('.room-select', 'x4');
+      assert.match(await page.textContent('#entryTitle'), /Room 4/);
+      await page.click('#siteModeBtn');
+      assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize), '18px');
+      await page.click('#siteModeBtn');
+    },
+  },
+  {
+    name: 'room details, fixtures, levels and a Bluetooth laser',
+    async run({ page, assert }) {
+      await page.addInitScript(() => {
+        const listeners = [];
+        const ch = {
+          addEventListener: (t, f) => listeners.push(f),
+          startNotifications: async () => {
+            window.__laserSend = (m) => {
+              const buf = new ArrayBuffer(4);
+              new DataView(buf).setFloat32(0, m, true);
+              listeners.forEach((f) => f({ target: { value: new DataView(buf) } }));
+            };
+          },
+        };
+        const device = {
+          name: 'DISTO D2',
+          addEventListener: () => {},
+          gatt: { connected: true, disconnect: () => {}, connect: async () => ({ getPrimaryService: async (u) => { if (u.startsWith('3ab10100')) return { getCharacteristic: async () => ch }; throw new Error('no'); } }) },
+        };
+        Object.defineProperty(navigator, 'bluetooth', { value: { requestDevice: async () => device } });
+      });
+      await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 4, 3), anchor: null }] });
+      await page.click('#roomDetails summary');
+      await page.fill('#rdFloor', 'Vinyl planks');
+      await page.press('#rdFloor', 'Tab');
+      assert.deepEqual((await saved(page)).rooms[0].details, { floor: 'Vinyl planks' });
+
+      await tapWall(page, 'r1b');
+      await page.click('#addFixtureBtn');
+      await page.selectOption('#fixtureType', 'gpo2');
+      await page.fill('#fxOffSingle', '600');
+      await page.fill('#fixtureQty', '2');
+      await page.click('#saveFixtureBtn');
+      await page.click('#addFixtureBtn');
+      await page.selectOption('#fixtureType', 'switch');
+      await page.fill('#fxOffSingle', '5000');
+      await page.click('#saveFixtureBtn');
+      assert.match(await page.textContent('#fixtureError'), /past the end/);
+      await page.click('#cancelFixtureBtn');
+      await page.click('#closeWallPanelBtn');
+      assert.deepEqual(await texts(page, '.plan-fixture-label'), ['2×DGPO1']);
+
+      await page.click('#laserBtn');
+      await page.waitForFunction(() => document.querySelector('#laserBtn').textContent.includes('connected'));
+      await page.evaluate(() => window.__laserSend(2.345));
+      assert.equal(await page.inputValue('#lenSingle'), '2345');
+
+      await page.click('#addLevelBtn');
+      await page.fill('.prompt-input', 'Level 1');
+      await confirm(page);
+      await addWall(page, 0, 2000); await addWall(page, 90, 2000); await addWall(page, 180, 2000); await addWall(page, 270, 2000);
+      assert.equal((await page.$$('.plan-band')).length, 4, 'only this level drawn');
+      await page.selectOption('#levelSelect', 'Ground floor');
+      const job = await saved(page);
+      assert.deepEqual(job.levels, ['Ground floor', 'Level 1']);
+      await page.click('#exportBtn');
+      await page.click('#exportPdfBtn');
+      await page.waitForFunction(() => window.__printed === 1);
+      assert.equal((await page.$$('#printView .print-plan')).length, 2);
+      assert.match(await page.textContent('#printView'), /Services & fixtures[\s\S]*Vinyl planks|Vinyl planks[\s\S]*Services & fixtures/);
+    },
+  },
+  {
+    name: 'a wall can’t be shortened past its doors, windows or fixtures',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 4, 3, { b: [door('d1', 2.5)] }), anchor: null }] });
+      await tapWall(page, 'r1b');
+      await page.fill('#panelLenSingle', '3000');
+      await page.click('#updateLengthBtn');
+      assert.match(await page.textContent('#panelLengthError'), /D1/);
+      assert.equal(mmOf((await saved(page)).rooms[0].walls[1].lengthM), 4000);
+    },
+  },
+  {
+    name: 'random jobs draw and switch rooms without errors',
+    async run({ page, assert }) {
+      let seed = 11;
+      const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+      const pick = (a) => a[Math.floor(rnd() * a.length)];
+      for (let trial = 0; trial < 25; trial++) {
+        const rooms = [];
+        const n = 3 + Math.floor(rnd() * 5);
+        for (let r = 0; r < n; r++) {
+          const walls = [];
+          const nw = pick([0, 1, 2, 4, 4, 5, 6]);
+          for (let w = 0; w < nw; w++) {
+            const len = pick([0.6, 1, 2, 3, 4.89, 5]);
+            const openings = rnd() < 0.4 ? [door(`o${r}_${w}`, rnd() * len * 0.5, { type: pick(['door', 'window', 'opening', 'other']), widthM: Math.min(0.9, len * 0.4), fromCorner: pick(['start', 'end']) })] : [];
+            const fixtures = rnd() < 0.3 ? [{ id: `f${r}_${w}`, type: pick(['gpo', 'grab', 'tap']), fromCorner: 'start', offsetM: len / 3, widthM: 0.3 }] : [];
+            walls.push({ id: `w${r}_${w}`, lengthM: len, angle: w === 0 ? pick([0, 90, 180, 270]) : pick([90, -90, 0]), openings, fixtures, thicknessM: pick([undefined, undefined, 0.23]) });
+          }
+          let anchor = null;
+          const hosts = rooms.filter((h) => h.walls.length);
+          if (r > 0 && hosts.length && rnd() < 0.8) {
+            const host = pick(hosts);
+            const hw = pick(host.walls);
+            anchor = rnd() < 0.6
+              ? { type: 'wall', shared: true, roomId: host.id, wallId: hw.id, offsetM: rnd() * hw.lengthM * 0.5, lengthM: hw.lengthM * 0.5, thicknessM: 0.11, side: pick([1, -1]), reversed: rnd() < 0.3 }
+              : { type: 'fixed', x: rnd() * 8 - 4, y: rnd() * 8 - 4, heading: null };
+          }
+          rooms.push({ id: `r${r}`, walls, anchor, level: pick([undefined, 'Ground floor']) });
+        }
+        await loadJob(page, { rooms });
+        const count = (await page.$$('#roomTabs .room-tab:not(.add)')).length;
+        for (let t = 0; t < count; t++) await page.click(`#roomTabs .room-tab:not(.add) >> nth=${t}`);
+      }
+      assert.ok(true);
+    },
+  },
+];
+
+module.exports = { tests };
