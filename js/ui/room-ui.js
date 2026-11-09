@@ -56,6 +56,13 @@ export function renderRoomTabs() {
   add.dataset.addRoom = '1';
   add.textContent = '+ Room';
   els.roomTabs.appendChild(add);
+  // keep the selected room's tab in view (centred where it can be)
+  const sel = els.roomTabs.querySelector('.room-tab.selected');
+  if (sel) {
+    const strip = els.roomTabs.getBoundingClientRect();
+    const tab = sel.getBoundingClientRect();
+    els.roomTabs.scrollLeft += (tab.left + tab.width / 2) - (strip.left + strip.width / 2);
+  }
 }
 
 export function renderRoomCard() {

@@ -60,7 +60,7 @@ function drawPlanSvg(svg, add, P) {
     const [x, y] = P(Number(c.getAttribute('cx')), Number(c.getAttribute('cy')));
     add([0, 'CIRCLE'], [8, 'FIXTURES'], [10, x], [20, y], [30, 0], [40, mm(Number(c.getAttribute('r')))]);
   });
-  svg.querySelectorAll('line.plan-fixture-line').forEach((line) => {
+  svg.querySelectorAll('line.plan-fixture-line, line.plan-fixture-leader').forEach((line) => {
     const [x1, y1] = P(Number(line.getAttribute('x1')), Number(line.getAttribute('y1')));
     const [x2, y2] = P(Number(line.getAttribute('x2')), Number(line.getAttribute('y2')));
     add([0, 'LINE'], [8, 'FIXTURES'], [10, x1], [20, y1], [30, 0], [11, x2], [21, y2], [31, 0]);

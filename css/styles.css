@@ -811,3 +811,22 @@ textarea.panel-input { resize: vertical; font-family: inherit; }
 .save-state.save-failed { color: var(--red); font-weight: 600; }
 /* anything marked hidden stays hidden, whatever its own display rule */
 .hidden { display: none !important; }
+.plan-fixture-leader { stroke: var(--green); opacity: 0.7; }
+.print-view .plan-fixture-leader { stroke: #127a3c; }
+
+/* ---------- v37: zoom row, wall window tabs ---------- */
+.plan-tools { display: flex; justify-content: flex-end; margin: 0.3rem 0 0.1rem; }
+.plan-tools .zoom-controls { position: static; }
+.plan-tools .zoom-btn { min-width: 34px; height: 30px; font-size: 1.05rem; padding: 0 0.5rem; }
+.wall-panel-titles { min-width: 0; }
+.wall-panel-titles h2 { margin: 0; font-size: 1.25rem; line-height: 1.2; }
+.wall-panel-sub { color: var(--text-dim); font-size: 0.85rem; margin-top: 0.15rem; }
+.wall-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.3rem; position: sticky; top: -1rem; z-index: 2;
+  background: var(--surface); padding: 0.4rem 0 0.5rem; margin-bottom: 0.3rem; border-bottom: 1px solid var(--border); }
+.wall-tab { border: 1px solid var(--border); background: var(--surface-2); color: var(--text-dim); border-radius: 8px;
+  padding: 0.55rem 0.2rem; font-size: 0.85rem; font-weight: 600; }
+.wall-tab.selected { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+body.site-mode .wall-tab { padding: 0.7rem 0.2rem; }
+.wall-pane .primary-btn { width: 100%; }
+.photo-add.primary-btn { display: block; text-align: center; cursor: pointer; }
+#wallPanel .wall-panel-inner { min-height: 70vh; }

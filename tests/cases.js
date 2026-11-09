@@ -157,6 +157,7 @@ const tests = [
     async run({ page, assert }) {
       await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 8, 3), anchor: null }] });
       await tapWall(page, 'r1b');
+      await page.click('#wallTabs [data-tab="size"]');
       await page.selectOption('#breakEndSelect', { index: 0 });
       await page.fill('#breakAtSingle', '2000');
       await page.click('#breakWallBtn');
@@ -197,6 +198,7 @@ const tests = [
         { id: 'r2', name: 'Kitchen', walls: rect('r2', 3, 3), anchor: { type: 'fixed', x: 4.11, y: 0, heading: null } },
       ] });
       await tapWall(page, 'r1a');
+      await page.click('#wallTabs [data-tab="size"]');
       await page.click('#wallThickChips .chip[data-mm="230"]');
       assert.equal((await saved(page)).rooms[0].walls[0].thicknessM, 0.23);
       const png = path.join(tmp, 'tiny.png');
@@ -315,6 +317,7 @@ const tests = [
       assert.deepEqual((await saved(page)).rooms[0].details, { floor: 'Vinyl planks' });
 
       await tapWall(page, 'r1b');
+      await page.click('#wallTabs [data-tab="fixtures"]');
       await page.click('#addFixtureBtn');
       await page.selectOption('#fixtureType', 'gpo2');
       await page.fill('#fxOffSingle', '600');
@@ -355,6 +358,7 @@ const tests = [
     async run({ page, assert }) {
       await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 4, 3, { b: [door('d1', 2.5)] }), anchor: null }] });
       await tapWall(page, 'r1b');
+      await page.click('#wallTabs [data-tab="size"]');
       await page.fill('#panelLenSingle', '3000');
       await page.click('#updateLengthBtn');
       assert.match(await page.textContent('#panelLengthError'), /D1/);
@@ -382,6 +386,7 @@ const tests = [
       // a door on its first wall, through the form
       await addWall(page, 90, 2000);
       await tapWall(page, job.rooms[2] ? (await saved(page)).rooms[2].walls[0].id : '');
+      await page.click('#wallTabs [data-tab="openings"]');
       await page.click('#addOpeningBtn');
       await page.click('#openingTypeButtons [data-type="door"]');
       await page.fill('#opOffSingle', '300');
@@ -524,6 +529,63 @@ const tests = [
       assert.deepEqual(job.levels, ['Ground floor']);
       assert.equal(job.rooms.length, 1);
       assert.equal(await page.inputValue('#levelSelect'), 'Ground floor');
+    },
+  },
+  {
+    name: 'labels on a busy plan don’t overlap, on screen or in the PDF',
+    async run({ page, assert }) {
+      const r1 = rect('r1', 5.2, 4.1, { b: [{ id: 'w1', type: 'window', measuredTo: 'plaster', fromCorner: 'start', offsetM: 1.5, widthM: 1.8, heightM: 1.2, sillM: 0.9 }], c: [door('d1', 1.2)] });
+      r1[3].fixtures = [{ id: 'f1', type: 'gpo2', fromCorner: 'start', offsetM: 1, qty: 2 }];
+      const r2 = rect('r2', 3.2, 4.1, { a: [door('d2', 1.2, { hinge: 'right' })], c: [door('d3', 2, { swing: 'out' })] });
+      const r3 = rect('r3', 2.4, 2.2, { b: [door('d4', 0.8)] });
+      r3[0].fixtures = [{ id: 'f2', type: 'grab', fromCorner: 'start', offsetM: 0.4, widthM: 0.9 }, { id: 'f3', type: 'tap', fromCorner: 'start', offsetM: 1.6 }];
+      await loadJob(page, { rooms: [
+        { id: 'r1', number: 1, name: 'Lounge', walls: r1, anchor: null },
+        { id: 'r2', number: 2, name: 'Bedroom 1', walls: r2, anchor: { type: 'fixed', x: 5.31, y: 0, heading: null } },
+        { id: 'r3', number: 3, name: 'Ensuite', walls: r3, anchor: { type: 'fixed', x: 5.31, y: -6.42, heading: null } },
+      ] });
+      const overlaps = (sel) => page.evaluate((selector) => {
+        const t = [...document.querySelectorAll(selector)].filter((e) => e.textContent.trim())
+          .map((e) => ({ s: e.textContent, r: e.getBoundingClientRect() }));
+        const hits = [];
+        const pad = 1; // px
+        t.forEach((a, i) => t.slice(i + 1).forEach((c) => {
+          if (a.r.left + pad < c.r.right && c.r.left + pad < a.r.right && a.r.top + pad < c.r.bottom && c.r.top + pad < a.r.bottom) hits.push(`${a.s} / ${c.s}`);
+        }));
+        return hits;
+      }, sel);
+      for (const tab of [0, 1, 2]) {
+        await page.click(`#roomTabs .room-tab >> nth=${tab}`);
+        assert.deepEqual(await overlaps('#planSvg text'), [], `screen, room ${tab + 1} selected`);
+      }
+      await page.click('#exportBtn');
+      await page.click('#exportPdfBtn');
+      await page.waitForFunction(() => window.__printed === 1);
+      await page.emulateMedia({ media: 'print' });
+      assert.deepEqual(await overlaps('#printView svg text'), [], 'PDF');
+      await page.emulateMedia({ media: 'screen' });
+    },
+  },
+  {
+    name: 'the selected room tab stays in view; the wall window has tabs',
+    async run({ page, assert }) {
+      const rooms = [1, 2, 3, 4, 5, 6].map((n) => ({ id: `r${n}`, number: n, name: `Long room name ${n}`, walls: rect(`r${n}`, 3, 3), anchor: { type: 'fixed', x: n * 4, y: 0, heading: null } }));
+      await loadJob(page, { rooms, activeRoomId: 'r6' });
+      const inView = await page.evaluate(() => {
+        const strip = document.querySelector('#roomTabs').getBoundingClientRect();
+        const tab = document.querySelector('#roomTabs .room-tab.selected').getBoundingClientRect();
+        return tab.left >= strip.left - 1 && tab.right <= strip.right + 1;
+      });
+      assert.ok(inView, 'selected tab fully visible');
+      await tapWall(page, 'r6b');
+      assert.deepEqual(await texts(page, '#wallTabs .wall-tab'), ['Size', 'Openings', 'Fixtures', 'Photos']);
+      assert.equal(await page.isVisible('#addOpeningBtn'), true, 'opens on Openings');
+      assert.equal(await page.isVisible('#updateLengthBtn'), false);
+      await page.click('#wallTabs [data-tab="size"]');
+      assert.equal(await page.isVisible('#updateLengthBtn'), true);
+      await page.click('#closeWallPanelBtn');
+      await tapWall(page, 'r6c');
+      assert.equal(await page.isVisible('#updateLengthBtn'), true, 'remembers the last tab');
     },
   },
   {

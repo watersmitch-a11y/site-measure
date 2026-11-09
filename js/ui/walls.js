@@ -80,10 +80,10 @@ export function openWallPanel(id) {
   els.panelMoveRoomBtn.textContent = `Move ${activeLabel()}`;
   els.panelMoveRoomBtn.classList.toggle('hidden', !canMove(activeRoom()));
   ui.panelWallId = id;
-  const roomPrefix = state.rooms.length > 1 ? `${activeLabel()} – ` : '';
   const side = roomSide(idx);
   els.wallPanelTitle.textContent =
-    `${roomPrefix}${side.charAt(0).toUpperCase()}${side.slice(1)} wall – ${units.formatLength(wall.lengthM, state.unit)}`;
+    `${side.charAt(0).toUpperCase()}${side.slice(1)} wall · ${units.formatLength(wall.lengthM, state.unit)}`;
+  $('#wallPanelSub').textContent = activeLabel();
   buildLengthInput(els.panelLengthInputs, state.unit, 'panelLen');
   setLength(state.unit, 'panelLen', wall.lengthM);
   els.panelLengthError.classList.add('hidden');
@@ -115,6 +115,7 @@ export function openWallPanel(id) {
   });
   hideOpeningForm();
   renderOpeningList();
+  setWallTab(ui.wallTab || 'openings');
   els.wallPanel.classList.remove('hidden');
   render();
 }
@@ -222,6 +223,7 @@ export function closeWallPanel() {
 }
 
 export function renderOpeningList() {
+  renderWallTabCounts();
   const wall = panelWall();
   els.openingList.innerHTML = '';
   if (!wall) return;
@@ -480,6 +482,7 @@ export function handleBreakWall() {
 }
 
 export function renderFixtureList() {
+  renderWallTabCounts();
   const wall = panelWall();
   const list = $('#fixtureList');
   list.innerHTML = '';
@@ -601,4 +604,34 @@ export async function handleDeleteFixture(id) {
   renderFixtureList();
   drawPlan();
   renderWallList();
+}
+
+// ---------- the wall window's tabs ----------
+// Size (length, thickness, breaking, ceiling) · Openings · Fixtures · Photos.
+// The last tab used is remembered while the app's open.
+
+export function setWallTab(name) {
+  ui.wallTab = name;
+  document.querySelectorAll('#wallTabs .wall-tab').forEach((t) => {
+    t.classList.toggle('selected', t.dataset.tab === name);
+    t.setAttribute('aria-selected', t.dataset.tab === name ? 'true' : 'false');
+  });
+  document.querySelectorAll('#wallPanel .wall-pane').forEach((p) => p.classList.toggle('hidden', p.dataset.pane !== name));
+  renderWallTabCounts();
+}
+
+export function renderWallTabCounts() {
+  const wall = panelWall();
+  if (!wall) return;
+  const room = activeRoom();
+  const counts = {
+    openings: (wall.openings || []).length,
+    fixtures: (wall.fixtures || []).reduce((sum, f) => sum + (f.qty || 1), 0),
+    photos: (room.photos || []).filter((p) => p.wallId === wall.id).length,
+  };
+  document.querySelectorAll('#wallTabs .wall-tab').forEach((t) => {
+    const n = counts[t.dataset.tab];
+    const base = { size: 'Size', openings: 'Openings', fixtures: 'Fixtures', photos: 'Photos' }[t.dataset.tab];
+    t.textContent = n ? `${base} ${n}` : base;
+  });
 }

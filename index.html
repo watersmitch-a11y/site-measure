@@ -98,7 +98,11 @@
 
     <div class="plan-wrap">
       <svg id="planSvg" class="plan-svg" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet"></svg>
-      <div class="zoom-controls">
+
+    </div>
+
+    <div class="plan-tools">
+      <div class="zoom-controls" aria-label="Zoom">
         <button type="button" id="zoomInBtn" class="zoom-btn" aria-label="Zoom in">+</button>
         <button type="button" id="zoomOutBtn" class="zoom-btn" aria-label="Zoom out">&minus;</button>
         <button type="button" id="zoomFitBtn" class="zoom-btn zoom-fit hidden" aria-label="Show whole plan">Fit</button>
@@ -290,10 +294,17 @@
   <div id="wallPanel" class="jobs-panel hidden">
     <div class="jobs-panel-inner wall-panel-inner">
       <div class="jobs-panel-header">
-        <h2 id="wallPanelTitle">Wall</h2>
+        <div class="wall-panel-titles"><h2 id="wallPanelTitle">Wall</h2><div id="wallPanelSub" class="wall-panel-sub"></div></div>
         <button id="closeWallPanelBtn" class="icon-btn">&times;</button>
       </div>
+      <div id="wallTabs" class="wall-tabs" role="tablist">
+        <button type="button" class="wall-tab" data-tab="size" role="tab">Size</button>
+        <button type="button" class="wall-tab" data-tab="openings" role="tab">Openings</button>
+        <button type="button" class="wall-tab" data-tab="fixtures" role="tab">Fixtures</button>
+        <button type="button" class="wall-tab" data-tab="photos" role="tab">Photos</button>
+      </div>
 
+      <div class="wall-pane" data-pane="size">
       <div class="panel-section">
         <div class="field-label">Wall length</div>
         <div id="panelLengthInputs" class="length-inputs"></div>
@@ -302,7 +313,7 @@
           <select id="keepClosedSelect" class="panel-select"></select>
         </div>
         <p id="panelLengthError" class="error-text hidden"></p>
-        <button id="updateLengthBtn" type="button" class="secondary-btn">Update Length</button>
+        <button id="updateLengthBtn" type="button" class="primary-btn">Update Length</button>
       </div>
 
       <div class="panel-section">
@@ -337,20 +348,17 @@
       </div>
 
       <div class="panel-section">
+        <button id="panelMoveRoomBtn" type="button" class="secondary-btn hidden">Move Room</button>
+      </div>
+      </div>
+
+      <div class="wall-pane" data-pane="openings">
+      <div class="panel-section">
         <div class="wall-list-header">
           <h3>Openings</h3>
         </div>
         <ul id="openingList" class="wall-list"></ul>
-        <button id="addOpeningBtn" type="button" class="secondary-btn">+ Add Opening</button>
-        <button id="panelMoveRoomBtn" type="button" class="secondary-btn hidden">Move Room</button>
-      </div>
-
-      <div class="panel-section">
-        <div class="field-label">Photos of this wall</div>
-        <div id="wallPhotos" class="photo-strip"></div>
-        <label class="secondary-btn photo-add">+ Photo of this wall
-          <input id="wallPhotoInput" type="file" accept="image/*" capture="environment" class="hidden" />
-        </label>
+        <button id="addOpeningBtn" type="button" class="primary-btn">+ Add Opening</button>
       </div>
 
       <form id="openingForm" class="panel-section opening-form hidden">
@@ -414,13 +422,15 @@
           <button type="submit" id="saveOpeningBtn" class="primary-btn">Save Opening</button>
         </div>
       </form>
+      </div>
 
+      <div class="wall-pane" data-pane="fixtures">
       <div class="panel-section">
         <div class="wall-list-header">
           <h3>Services &amp; fixtures</h3>
         </div>
         <ul id="fixtureList" class="wall-list"></ul>
-        <button id="addFixtureBtn" type="button" class="secondary-btn">+ Add fixture</button>
+        <button id="addFixtureBtn" type="button" class="primary-btn">+ Add fixture</button>
         <div id="fixtureForm" class="opening-form hidden">
           <div class="field-label">Type</div>
           <select id="fixtureType" class="panel-select"></select>
@@ -448,6 +458,18 @@
           </div>
         </div>
       </div>
+      </div>
+
+      <div class="wall-pane" data-pane="photos">
+      <div class="panel-section">
+        <div class="field-label">Photos of this wall</div>
+        <div id="wallPhotos" class="photo-strip"></div>
+        <label class="primary-btn photo-add">+ Photo of this wall
+          <input id="wallPhotoInput" type="file" accept="image/*" capture="environment" class="hidden" />
+        </label>
+      </div>
+      </div>
+
     </div>
   </div>
 

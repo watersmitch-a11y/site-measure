@@ -15,7 +15,7 @@ import { applyMoveDim, endMove, handleDoorMatch, movingRoom, movingRoots, openDo
 import { buildCeilingInput, buildLengthInputs, handleAddWall, handleClosePolygon, handleDeleteWall, handleEditWall, handleUndo, renderEntryTitle, renderMatchChips, resetEntryForm, setCustomSide, setSelectedHeading } from './entry.js';
 import { clampViewWidth, drawPlan, nearestHitLine, planFraction, render, renderStats, roomAtPoint, shownView, touchDist, touchMid, zoomAt, zoomFit } from './view.js';
 import { typeDetails, closeDetails, closeExport, currentJob, exportFailed, handleDeleteJob, handleLoadJob, handleNewJob, openDetails, renderJobsPanel, setSiteMode } from './jobs.js';
-import { closeWallPanel, fillKeepClosed, handleBreakWall, handleDeleteFixture, handleDeleteOpening, handleSaveFixture, handleSaveOpening, handleUpdateLength, handleWallThickness, hideFixtureForm, hideOpeningForm, openWallPanel, panelWall, planEnds, roomSide, setFixtureTypeFields, setOpeningCorner, setOpeningHinge, setOpeningSwing, setOpeningType, showFixtureForm, showOpeningForm } from './walls.js';
+import { setWallTab, closeWallPanel, fillKeepClosed, handleBreakWall, handleDeleteFixture, handleDeleteOpening, handleSaveFixture, handleSaveOpening, handleUpdateLength, handleWallThickness, hideFixtureForm, hideOpeningForm, openWallPanel, panelWall, planEnds, roomSide, setFixtureTypeFields, setOpeningCorner, setOpeningHinge, setOpeningSwing, setOpeningType, showFixtureForm, showOpeningForm } from './walls.js';
 import { handleAddLevel, handleDeleteLevel, handleRenameLevel, switchLevel } from './levels.js';
 import { handleLaserBtn } from './laser-ui.js';
 import { flushPending, persist, redo, saveJob, saveSoon, undo } from './history.js';
@@ -480,6 +480,10 @@ $('#addLevelBtn').addEventListener('click', handleAddLevel);
 $('#renameLevelBtn').addEventListener('click', handleRenameLevel);
 $('#deleteLevelBtn').addEventListener('click', handleDeleteLevel);
 
+$('#wallTabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('.wall-tab');
+  if (tab) setWallTab(tab.dataset.tab);
+});
 $('#addFixtureBtn').addEventListener('click', () => showFixtureForm(null));
 
 $('#cancelFixtureBtn').addEventListener('click', hideFixtureForm);

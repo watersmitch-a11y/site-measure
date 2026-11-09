@@ -6,7 +6,7 @@ import { activeRoom, els, roomIndex, state, ui } from './core.js';
 import { flushPending, history, persist, saveSoon } from './history.js';
 import * as store from '../storage.js';
 import { renderRoomCard } from './room-ui.js';
-import { roomSide } from './walls.js';
+import { renderWallTabCounts, roomSide } from './walls.js';
 import { showAlert, showConfirm } from './dialogs.js';
 
 // Photos are taken (or picked) per room or per wall, shrunk, and kept in the
@@ -26,6 +26,7 @@ export async function photoUrl(id) {
 }
 
 export function renderPhotoStrip(container, room, wallId) {
+  if (wallId !== undefined) renderWallTabCounts();
   const list = (room.photos || []).filter((p) => (wallId === undefined ? true : p.wallId === wallId));
   container.innerHTML = '';
   if (!list.length) {

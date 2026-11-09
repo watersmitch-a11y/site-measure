@@ -18,6 +18,108 @@ function el(tag, attrs = {}) {
   return e;
 }
 
+// ---------- keeping labels clear of each other ----------
+// Labels are drawn where they'd ideally go, with a few fallback spots. Once
+// everything's drawn, each label (most important first) takes the first spot
+// that doesn't overlap a label already placed, a wall line or a door swing.
+
+const textSize = (text, fs) => ({ w: Math.max(String(text).length, 1) * fs * 0.56, h: fs * 1.05 });
+
+// Does the segment p→q cross the box of half-size hw×hh centred at c and
+// turned by angle (degrees)?
+function segmentHitsBox(p, q, c, hw, hh, angle) {
+  const rad = (-angle * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const local = (v) => ({ x: (v.x - c.x) * cos - (v.y - c.y) * sin, y: (v.x - c.x) * sin + (v.y - c.y) * cos });
+  const a = local(p);
+  const b = local(q);
+  let t0 = 0;
+  let t1 = 1;
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const clip = (pp, qq) => {
+    if (Math.abs(pp) < 1e-12) return qq >= 0;
+    const r = qq / pp;
+    if (pp < 0) { if (r > t1) return false; if (r > t0) t0 = r; } else { if (r < t0) return false; if (r < t1) t1 = r; }
+    return true;
+  };
+  return clip(-dx, a.x + hw) && clip(dx, hw - a.x) && clip(-dy, a.y + hh) && clip(dy, hh - a.y);
+}
+
+function boxOf(item, p) {
+  const rad = ((item.angle || 0) * Math.PI) / 180;
+  const c = Math.abs(Math.cos(rad));
+  const s = Math.abs(Math.sin(rad));
+  const hw = item.w / 2;
+  const hh = item.h / 2;
+  const ex = c * hw + s * hh;
+  const ey = s * hw + c * hh;
+  return { x0: p.x - ex, x1: p.x + ex, y0: p.y - ey, y1: p.y + ey };
+}
+
+const boxesOverlap = (a, b, pad) => a.x0 < b.x1 + pad && b.x0 < a.x1 + pad && a.y0 < b.y1 + pad && b.y0 < a.y1 + pad;
+
+function placeLabels(ctx) {
+  const placed = [...ctx.obstacles];
+  const pad = ctx.fontSize * 0.08;
+  [...ctx.labels].sort((a, b) => a.prio - b.prio).forEach((item) => {
+    const allowed = item.inside ? item.cands.filter(item.inside) : item.cands;
+    const pool = allowed.length ? allowed : item.cands;
+    const sized = (k) => ({ ...item, w: item.w * k, h: item.h * k });
+    const fits = (it, p) => {
+      const box = boxOf(it, p);
+      if (placed.some((o) => boxesOverlap(box, o, pad))) return false;
+      const hw = it.w / 2 + pad;
+      const hh = it.h / 2 + pad;
+      return !ctx.segments.some(([a, b]) => segmentHitsBox(a, b, p, hw, hh, it.angle || 0));
+    };
+    // full size if there's a clear spot, else a little smaller (names and tags)
+    let scale = 1;
+    let at = null;
+    for (const k of [1, ...(item.shrink || [])]) {
+      at = pool.find((p) => fits(sized(k), p));
+      if (at) { scale = k; break; }
+    }
+    if (!at) {
+      // nowhere clear: take the spot that covers least of what's there
+      scale = (item.shrink || [1]).slice(-1)[0];
+      const it = sized(scale);
+      const cost = (p) => {
+        const box = boxOf(it, p);
+        let c = 0;
+        placed.forEach((o) => {
+          const w = Math.min(box.x1, o.x1) - Math.max(box.x0, o.x0);
+          const h = Math.min(box.y1, o.y1) - Math.max(box.y0, o.y0);
+          if (w > 0 && h > 0) c += w * h;
+        });
+        ctx.segments.forEach(([a, b]) => { if (segmentHitsBox(a, b, p, it.w / 2, it.h / 2, it.angle || 0)) c += it.h * it.h * 0.5; });
+        return c;
+      };
+      at = pool.reduce((best, p) => (cost(p) < cost(best) ? p : best), pool[0]);
+    }
+    placed.push(boxOf(sized(scale), at));
+    if (scale !== 1) {
+      item.el.setAttribute('font-size', Number(item.el.getAttribute('font-size')) * scale);
+      if (item.onScale) item.onScale(scale);
+    }
+    item.el.setAttribute('x', at.x);
+    item.el.setAttribute('y', at.y);
+    if (item.angle) item.el.setAttribute('transform', `rotate(${item.angle}, ${at.x}, ${at.y})`);
+    if (item.after) item.after(at, scale);
+  });
+}
+
+function insidePolygon(pt, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i];
+    const b = pts[j];
+    if ((a.y > pt.y) !== (b.y > pt.y) && pt.x < ((b.x - a.x) * (pt.y - a.y)) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
+}
+
 // Keeps text upright: an angle along the wall, flipped by 180° if needed.
 function readableAngle(angle) {
   let a = angle;
@@ -85,11 +187,15 @@ export function renderPlan(svg, rooms, unit, {
   // shared stretches and doorways of the room being worked on, drawn undimmed on top
   const brightGroup = el('g', { class: 'plan-room active' });
   const merges = wallMerges(rooms, geom);
-  const ctx = { unit, strokeWidth, fontSize, tags, fxTags, selectedWallId, hitGroup, print, merges, brightGroup, activeRoomId, movingIds };
+  const ctx = {
+    unit, strokeWidth, fontSize, tags, fxTags, selectedWallId, hitGroup, print, merges, brightGroup, activeRoomId, movingIds,
+    labels: [], obstacles: [], segments: [],
+  };
 
   if (print) {
     rooms.forEach((r, i) => drawRoom(svg, r, i, geom.get(r.id), true, ctx));
     svg.appendChild(brightGroup);
+    placeLabels(ctx);
     return;
   }
 
@@ -105,6 +211,7 @@ export function renderPlan(svg, rooms, unit, {
   rooms.filter((r) => r !== activeRoom).forEach((r) => safeDraw(r, false));
   if (activeRoom) safeDraw(activeRoom, true);
   svg.appendChild(brightGroup);
+  placeLabels(ctx);
 
   // clear runs to the next room's wall, for drawing a room into a gap
   gapDims.forEach((dim) => {
@@ -218,6 +325,8 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
     const oy = ny * -insideSign;
     const WT = T(i);
     const outward = (p, d = WT) => ({ x: p.x + ox * d, y: p.y + oy * d });
+    // both faces of the wall, for keeping labels off it
+    if (len > 0.01) ctx.segments.push([a, b], [outward(a), outward(b)]);
 
     const key = `${room.id}|${i}`;
     const hidden = merges.hidden.get(key) || [];
@@ -328,6 +437,10 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
           'data-hinge': `${hinge.x},${hinge.y}`, // for the CAD export's arc
           'stroke-width': strokeWidth * 0.3,
         }));
+        // the swing's area is kept clear of other labels
+        const xs = [hinge.x, tip.x, latch.x, hinge.x + (swingX + (latch.x - hinge.x) / r) * r * 0.71];
+        const ys = [hinge.y, tip.y, latch.y, hinge.y + (swingY + (latch.y - hinge.y) / r) * r * 0.71];
+        ctx.obstacles.push({ x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys), door: true });
         // tag sits inside the swing, clear of the leaf and the arc
         tagPos = {
           x: hinge.x + (swingX + (latch.x - hinge.x) / r) * r * 0.42,
@@ -344,6 +457,7 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
         }));
       }
       // other openings are tagged inside the measuring room; wall lengths go outside
+      const isDoorTag = !!tagPos;
       if (!tagPos) {
         const mid = { x: (s.x + e.x) / 2, y: (s.y + e.y) / 2 };
         tagPos = {
@@ -363,6 +477,15 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
       });
       tag.textContent = tagText;
       target.appendChild(tag);
+      // a door's tag stays in its swing (whose area keeps others away);
+      // other tags can step further into the room
+      if (!isDoorTag) {
+        const step = (k) => ({ x: tx + nx * side * fontSize * 0.9 * k, y: ty + ny * side * fontSize * 0.9 * k });
+        ctx.labels.push({
+          el: tag, angle: textAngle, ...textSize(tagText, fontSize * 0.75), prio: 2,
+          cands: [step(0), step(1), step(2), step(3)],
+        });
+      }
     };
 
     // this wall's own openings, unless they sit in a stretch another room draws
@@ -391,19 +514,50 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
         const q = at(f1, inset);
         group.appendChild(el('line', { x1: p.x, y1: p.y, x2: q.x, y2: q.y, class: 'plan-fixture-line', 'stroke-width': strokeWidth * 0.5 }));
       }
-      const c = at((f0 + f1) / 2, inset);
-      group.appendChild(el('circle', { cx: c.x, cy: c.y, r: fontSize * 0.18, class: 'plan-fixture' }));
-      const t = at((f0 + f1) / 2, inset + fontSize * 0.7);
+      const mid = (f0 + f1) / 2;
+      const c = at(mid, inset);
+      const dotR = fontSize * 0.2;
+      group.appendChild(el('circle', { cx: c.x, cy: c.y, r: dotR, class: 'plan-fixture' }));
+      ctx.obstacles.push({ x0: c.x - dotR, x1: c.x + dotR, y0: c.y - dotR, y1: c.y + dotR });
+      // other rooms on screen just show the dot, to keep the plan readable
+      if (!active && !print) return;
+      // the tag reads level, a little way into the room, with a leader back
+      // to the dot so it can sit wherever there's space
+      const text = `${f.qty > 1 ? `${f.qty}×` : ''}${ctx.fxTags[f.id]}`;
+      const fs = fontSize * 0.62;
+      const leader = el('line', { class: 'plan-fixture-leader', 'stroke-width': strokeWidth * 0.25 });
+      group.appendChild(leader);
       const label = el('text', {
-        x: t.x, y: t.y,
         'text-anchor': 'middle',
         'dominant-baseline': 'central',
-        'font-size': fontSize * 0.5,
-        transform: `rotate(${textAngle}, ${t.x}, ${t.y})`,
+        'font-size': fs,
         class: 'plan-fixture-label',
       });
-      label.textContent = `${f.qty > 1 ? `${f.qty}×` : ''}${ctx.fxTags[f.id]}`;
+      label.textContent = text;
       group.appendChild(label);
+      const size = textSize(text, fs);
+      const cands = [];
+      [1.3, 2.2, 3.1].forEach((d) => [0, -1.6, 1.6, -3.2, 3.2].forEach((sk) => {
+        const p = at(mid + sk * fontSize, inset + fontSize * d);
+        cands.push(p);
+      }));
+      ctx.labels.push({
+        // they sit by their wall; the room's name has more room to move
+        el: label, angle: 0, ...size, prio: 1.2, cands, shrink: [0.8, 0.65],
+        inside: (p) => insidePolygon(p, points),
+        after: (p, k = 1) => {
+          // leader from the dot to the near edge of the tag
+          const dx = p.x - c.x;
+          const dy = p.y - c.y;
+          const d = Math.hypot(dx, dy) || 1;
+          const stop = Math.min(Math.abs((size.w * k / 2) / (dx / d || 1e-9)), Math.abs((size.h * k / 2) / (dy / d || 1e-9)));
+          const end = Math.max(d - stop - fontSize * 0.08, 0);
+          leader.setAttribute('x1', c.x + (dx / d) * dotR);
+          leader.setAttribute('y1', c.y + (dy / d) * dotR);
+          leader.setAttribute('x2', c.x + (dx / d) * end);
+          leader.setAttribute('y2', c.y + (dy / d) * end);
+        },
+      });
     });
 
     if (active) {
@@ -480,6 +634,24 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
       });
       label.textContent = labelText;
       group.appendChild(label);
+      // fallbacks: slide along the wall, then step further out
+      const halfW = labelText.length * fontSize * 0.28;
+      const lo = Math.min(halfW * 0.8, w.lengthM / 2);
+      const hi = Math.max(w.lengthM - halfW * 0.8, w.lengthM / 2);
+      const spotAt = (m, extra) => {
+        const base = along(Math.min(Math.max(m, lo), hi));
+        const off = offset + extra * labelSide;
+        return { x: base.x + nx * off, y: base.y + ny * off };
+      };
+      const cands = [{ x: lx, y: ly }];
+      [0.15, -0.15, 0.3, -0.3].forEach((k) => cands.push(spotAt(labelAt + k * w.lengthM, 0)));
+      [1.2, 2.4].forEach((r) => [0, 0.2, -0.2].forEach((k) => cands.push(spotAt(labelAt + k * w.lengthM, fontSize * r))));
+      // in print, a cramped room's lengths can go just outside its wall
+      if (print) {
+        const outside = -(WT + fontSize * 0.9) - offset * labelSide; // from the inside spot to just past the wall
+        [0, 0.2, -0.2].forEach((k) => cands.push(spotAt(labelAt + k * w.lengthM, outside)));
+      }
+      ctx.labels.push({ el: label, angle: textAngle, ...textSize(labelText, fontSize), prio: active && !print ? 0 : 1, cands });
     }
 
     // wide invisible line on top so walls are easy to tap
@@ -525,8 +697,9 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
     });
     name.textContent = roomLabel(room, roomIndex);
     group.appendChild(name);
+    let sub = null;
     if (print) {
-      const sub = el('text', {
+      sub = el('text', {
         x: cx,
         y: cy + fontSize * 1.1,
         'text-anchor': 'middle',
@@ -537,6 +710,27 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
       sub.textContent = formatArea(polygonArea(points), unit);
       group.appendChild(sub);
     }
+    // the name (and area under it in print) moves as one block if it must
+    const nameSize = textSize(name.textContent.length > (sub ? sub.textContent.length : 0) ? name.textContent : sub.textContent, fontSize * 0.9);
+    const blockH = sub ? fontSize * 2.1 : nameSize.h;
+    const shiftY = sub ? fontSize * 0.55 : 0;
+    const cands = [];
+    [0, 1, -1, 2, -2, 3, -3].forEach((ky) => [0, 1.5, -1.5, 3, -3].forEach((kx) => {
+      cands.push({ x: cx + kx * fontSize, y: cy + shiftY + ky * fontSize * 0.9 });
+    }));
+    ctx.labels.push({
+      // in print the name goes first: lengths can step outside, the name can't
+      el: name, angle: 0, w: nameSize.w, h: blockH, prio: print ? 0.2 : 1.5, cands, shrink: [0.8, 0.65],
+      onScale: (k) => { if (sub) sub.setAttribute('font-size', Number(sub.getAttribute('font-size')) * k); },
+      inside: points.length >= 3 && Math.abs(polygonArea(points) || 0) > 0.01 && roomClosedEnough(points) ? (p) => insidePolygon(p, points) : null,
+      after: (p, k = 1) => {
+        name.setAttribute('y', p.y - shiftY * k);
+        if (sub) {
+          sub.setAttribute('x', p.x);
+          sub.setAttribute('y', p.y - shiftY * k + fontSize * 1.1 * k);
+        }
+      },
+    });
   }
 
   if (!active || print) return;
@@ -571,13 +765,23 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
   );
   const startLabel = el('text', {
     x: start.x,
-    y: start.y - fontSize * 0.7,
+    y: start.y - fontSize * 0.9,
     'text-anchor': 'middle',
+    'dominant-baseline': 'central',
     'font-size': fontSize * 0.85,
     class: 'plan-label plan-start-label',
   });
   startLabel.textContent = 'Start';
-  group.appendChild(startLabel);
+  // once the room's closed the dot's enough; the word only crowds a small room
+  const isClosed = walls.length >= minWalls + 1 && gap != null && gap <= 0.05;
+  if (!isClosed) group.appendChild(startLabel);
+  const sr = fontSize * 0.35;
+  ctx.obstacles.push({ x0: start.x - sr, x1: start.x + sr, y0: start.y - sr, y1: start.y + sr });
+  const d = fontSize * 0.95;
+  if (!isClosed) ctx.labels.push({
+    el: startLabel, angle: 0, ...textSize('Start', fontSize * 0.85), prio: 0.5,
+    cands: [[0, -1], [0, 1], [-1.9, 0], [1.9, 0], [-1.5, -1], [1.5, -1], [-1.5, 1], [1.5, 1]].map(([kx, ky]) => ({ x: start.x + kx * d, y: start.y + ky * d })),
+  });
 
   // current open end marker
   if (walls.length > 0) {
@@ -591,4 +795,11 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
       })
     );
   }
+}
+
+// A room's own outline only counts as an inside once it nearly closes.
+function roomClosedEnough(points) {
+  const a = points[0];
+  const b = points[points.length - 1];
+  return Math.hypot(a.x - b.x, a.y - b.y) < 0.2;
 }
