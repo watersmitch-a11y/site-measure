@@ -830,3 +830,4 @@ body.site-mode .wall-tab { padding: 0.7rem 0.2rem; }
 .wall-pane .primary-btn { width: 100%; }
 .photo-add.primary-btn { display: block; text-align: center; cursor: pointer; }
 #wallPanel .wall-panel-inner { min-height: 70vh; }
+.update-row { display: flex; align-items: center; justify-content: space-between; margin-top: 0.8rem; font-size: 0.85rem; color: var(--text-dim); }

@@ -589,6 +589,20 @@ const tests = [
     },
   },
   {
+    name: 'renaming a room renames it on the plan as you type',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 4, 3), anchor: null }] });
+      await page.click('#roomName');
+      await page.keyboard.type('Kitchen');
+      assert.deepEqual(await texts(page, '.plan-room-name'), ['Kitchen']);
+      await page.click('#entryTitle');
+      await page.reload();
+      assert.deepEqual(await texts(page, '.plan-room-name'), ['Kitchen']);
+      await page.click('#detailsBtn');
+      assert.match(await page.textContent('#versionText'), /Version \d+/);
+    },
+  },
+  {
     name: 'random jobs draw and switch rooms without errors',
     async run({ page, assert }) {
       let seed = 11;

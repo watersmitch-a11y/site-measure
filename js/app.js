@@ -1,10 +1,10 @@
 // Site Measure: starts the app. The work is done by the modules in js/ui/.
 
 import * as store from './storage.js';
-import { APP_VERSION, els } from './ui/core.js';
+import { $, APP_VERSION, els } from './ui/core.js';
 import { SITE_MODE_KEY, applyJob, setSiteMode } from './ui/jobs.js';
 import { buildCeilingInput, buildLengthInputs, setCustomSide, setSelectedHeading } from './ui/entry.js';
-import { history, persist, resetHistory } from './ui/history.js';
+import { flushPending, history, persist, resetHistory } from './ui/history.js';
 import { render } from './ui/view.js';
 import { cleanUpPhotos } from './ui/photo-ui.js';
 import './ui/events.js'; // wires up the page
@@ -54,5 +54,34 @@ function registerServiceWorker() {
     });
   }).catch(() => {});
 }
+
+// Details → Check for updates: fetch the newest version now, rather than
+// waiting for the phone to check by itself. The page reloads when it lands.
+async function checkForUpdates() {
+  const status = $('#updateStatus');
+  const say = (text) => { status.textContent = text; status.classList.remove('hidden'); };
+  if (!('serviceWorker' in navigator)) return location.reload();
+  say('Checking…');
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) return location.reload();
+    await reg.update();
+    const incoming = reg.installing || reg.waiting;
+    if (!incoming) {
+      say(`You have the latest version (v${APP_VERSION}).`);
+      return;
+    }
+    say('Downloading the new version… the app will restart in a moment.');
+    flushPending();
+    persist();
+    // it takes over and the page reloads (see registerServiceWorker); just in case:
+    setTimeout(() => location.reload(), 10000);
+  } catch {
+    say("Couldn't check: no internet connection? Try again when you have signal.");
+  }
+}
+
+$('#versionText').textContent = `Version ${APP_VERSION}`;
+$('#checkUpdateBtn').addEventListener('click', checkForUpdates);
 
 init();
