@@ -9,6 +9,7 @@ const LAYERS = [
   { name: 'WALLS', color: 7 },
   { name: 'OPENINGS', color: 4 },
   { name: 'TEXT', color: 2 },
+  { name: 'FIXTURES', color: 6 },
 ];
 
 const mm = (v) => Math.round(v * 1000 * 10) / 10; // plan metres to mm, to 0.1 mm
@@ -21,13 +22,30 @@ function pairs(list) {
 }
 
 export function dxfString(job) {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  renderPlan(svg, job.rooms, job.unit, { print: true });
-
   const out = [];
-  const P = (x, y) => [mm(x), mm(-y)]; // flip y: the plan's y runs down, CAD's up
   const add = (...rows) => out.push(pairs(rows));
+  // each level is drawn on its own, side by side, 5 m apart, with its name over it
+  const levels = job.levels && job.levels.length ? job.levels : ['Ground floor'];
+  const levelOf = (r) => (r.level && levels.includes(r.level) ? r.level : levels[0]);
+  const plans = levels.map((name) => ({ name, rooms: job.rooms.filter((r) => levelOf(r) === name) }))
+    .filter((l) => l.rooms.some((r) => r.walls.length));
+  let shiftX = 0;
+  plans.forEach((plan) => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    renderPlan(svg, plan.rooms, job.unit, { print: true });
+    const vb = svg.getAttribute('viewBox').split(/\s+/).map(Number);
+    const dx = shiftX - vb[0];
+    if (plans.length > 1) {
+      add([0, 'TEXT'], [8, 'TEXT'], [10, mm(dx + vb[0])], [20, mm(-vb[1]) + 300], [30, 0], [40, 400], [1, plain(plan.name)]);
+    }
+    drawPlanSvg(svg, add, (x, y) => [mm(x + dx), mm(-y)]);
+    shiftX += vb[2] + 5;
+  });
+  return wrapDxf(out);
+}
 
+// The entities for one rendered plan. P maps plan metres to CAD millimetres.
+function drawPlanSvg(svg, add, P) {
   svg.querySelectorAll('polygon.plan-band').forEach((poly) => {
     const pts = poly.getAttribute('points').trim().split(/\s+/).map((pair) => pair.split(',').map(Number));
     add([0, 'POLYLINE'], [8, 'WALLS'], [66, 1], [70, 1]);
@@ -36,6 +54,16 @@ export function dxfString(job) {
       add([0, 'VERTEX'], [8, 'WALLS'], [10, X], [20, Y], [30, 0]);
     });
     add([0, 'SEQEND'], [8, 'WALLS']);
+  });
+
+  svg.querySelectorAll('circle.plan-fixture').forEach((c) => {
+    const [x, y] = P(Number(c.getAttribute('cx')), Number(c.getAttribute('cy')));
+    add([0, 'CIRCLE'], [8, 'FIXTURES'], [10, x], [20, y], [30, 0], [40, mm(Number(c.getAttribute('r')))]);
+  });
+  svg.querySelectorAll('line.plan-fixture-line').forEach((line) => {
+    const [x1, y1] = P(Number(line.getAttribute('x1')), Number(line.getAttribute('y1')));
+    const [x2, y2] = P(Number(line.getAttribute('x2')), Number(line.getAttribute('y2')));
+    add([0, 'LINE'], [8, 'FIXTURES'], [10, x1], [20, y1], [30, 0], [11, x2], [21, y2], [31, 0]);
   });
 
   svg.querySelectorAll('line.plan-opening').forEach((line) => {
@@ -67,10 +95,12 @@ export function dxfString(job) {
     const h = Number(text.getAttribute('font-size')) || 0.2;
     const rot = /rotate\(\s*(-?[\d.e-]+)/i.exec(text.getAttribute('transform') || '');
     const [X, Y] = P(x, y);
-    add([0, 'TEXT'], [8, 'TEXT'], [10, X], [20, Y], [30, 0], [40, mm(h * 0.8)], [1, content],
+    add([0, 'TEXT'], [8, text.classList.contains('plan-fixture-label') ? 'FIXTURES' : 'TEXT'], [10, X], [20, Y], [30, 0], [40, mm(h * 0.8)], [1, content],
       [50, rot ? (-Number(rot[1])).toFixed(3) : 0], [72, 1], [11, X], [21, Y], [31, 0], [73, 2]);
   });
+}
 
+function wrapDxf(out) {
   const header = pairs([
     [0, 'SECTION'], [2, 'HEADER'],
     [9, '$ACADVER'], [1, 'AC1009'],

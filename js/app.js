@@ -9,9 +9,11 @@ import { exportPlan } from './export.js';
 import { exportDxf } from './dxf.js';
 import * as jobfile from './jobfile.js';
 import * as photos from './photos.js';
+import * as fx from './fixtures.js';
+import * as laser from './laser.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-const APP_VERSION = 32;
+const APP_VERSION = 33;
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -23,6 +25,8 @@ const state = {
   rooms: [rm.newRoom()],
   activeRoomId: null,
   details: {}, // { address, client, measuredBy }
+  levels: ['Ground floor'], // floors of the building, in order
+  level: 'Ground floor', // the floor on screen
 };
 state.rooms[0].number = 1;
 state.activeRoomId = state.rooms[0].id;
@@ -49,6 +53,66 @@ function allWalls() {
 
 function roomIndex(room) {
   return state.rooms.indexOf(room);
+}
+
+// ---------- levels ----------
+// Each room is on a level (floor); the plan, room tabs, snapping, joins and
+// gap sizes only ever deal with the rooms on the level on screen.
+
+function levelOf(room) {
+  return room.level && state.levels.includes(room.level) ? room.level : state.levels[0];
+}
+
+function levelRooms(level = state.level) {
+  return state.rooms.filter((r) => levelOf(r) === level);
+}
+
+function renderLevelBar() {
+  const sel = $('#levelSelect');
+  sel.innerHTML = '';
+  state.levels.forEach((name) => {
+    const n = levelRooms(name).filter((r) => r.walls.length).length;
+    sel.add(new Option(`${name}${n ? ` (${n} room${n > 1 ? 's' : ''})` : ''}`, name, false, name === state.level));
+  });
+}
+
+function switchLevel(name) {
+  if (ui.moving) endMove(true);
+  stopPlacing();
+  state.level = name;
+  ui.view = null;
+  const here = levelRooms();
+  if (here.length) {
+    setActiveRoom((here.find((r) => r.id === state.activeRoomId) || here[0]).id);
+  } else {
+    const room = rm.newRoom({ type: 'fixed', x: 0, y: 0, heading: null });
+    room.number = rm.nextRoomNumber(state.rooms);
+    room.level = name;
+    const lastCeiling = [...state.rooms].reverse().find((r) => r.ceilingHeightM);
+    room.ceilingHeightM = lastCeiling ? lastCeiling.ceilingHeightM : null;
+    state.rooms.push(room);
+    setActiveRoom(room.id);
+  }
+}
+
+async function handleAddLevel() {
+  const name = await showPrompt('Name of the new level', `Level ${state.levels.length}`);
+  if (!name) return;
+  if (state.levels.includes(name)) return showAlert(`There's already a level called "${name}".`);
+  state.levels.push(name);
+  switchLevel(name);
+}
+
+async function handleRenameLevel() {
+  const old = state.level;
+  const name = await showPrompt('Rename this level', old);
+  if (!name || name === old) return;
+  if (state.levels.includes(name)) return showAlert(`There's already a level called "${name}".`);
+  state.rooms.forEach((r) => { if (levelOf(r) === old) r.level = name; });
+  state.levels = state.levels.map((l) => (l === old ? name : l));
+  state.level = name;
+  persist();
+  render();
 }
 
 function geometryOf(room) {
@@ -378,7 +442,7 @@ function roomGaps() {
   const near = [g.points[0], g.points[entryIndex()], g.target].filter(Boolean); // start, open end, where it closes
   if (!near.length) return [];
   const runs = gapDims();
-  return rm.roomGapsNear(state.rooms, rm.roomGeometry(state.rooms), room.id, near)
+  return rm.roomGapsNear(levelRooms(), rm.roomGeometry(levelRooms()), room.id, near)
     .filter((rg) => !runs.some((r) => Math.abs(r.distM - rg.distM) < 0.0005)) // already shown
     .map((rg) => ({ ...rg, label: units.formatLength(rg.distM, state.unit) }));
 }
@@ -398,9 +462,9 @@ function gapDims() {
   const headings = chosen != null
     ? [chosen]
     : [0, 90, 180, 270].filter((h) => prev == null || Math.abs(Math.abs(normalizeAngle180(h - prev)) - 180) > 0.01);
-  const geom = rm.roomGeometry(state.rooms);
+  const geom = rm.roomGeometry(levelRooms());
   return headings.map((h) => {
-    const run = rm.clearRunTo(state.rooms, geom, room.id, from, h);
+    const run = rm.clearRunTo(levelRooms(), geom, room.id, from, h);
     if (!run) return null;
     const other = state.rooms.find((r) => r.id === run.roomId);
     return {
@@ -476,6 +540,7 @@ function render() {
   renderEntryTitle();
   els.addWallBtn.textContent = ui.editingId ? 'Update Wall' : 'Add Wall';
 
+  renderLevelBar();
   renderRoomTabs();
   renderRoomCard();
   drawPlan();
@@ -499,7 +564,7 @@ function render() {
 function drawPlan() {
   let viewBox = ui.moving && ui.moving.viewBox;
   if (!viewBox && ui.view) viewBox = { x: ui.view.x, y: ui.view.y, width: ui.view.w, height: ui.view.w };
-  renderPlan(els.planSvg, state.rooms, state.unit, {
+  renderPlan(els.planSvg, levelRooms(), state.unit, {
     activeRoomId: state.activeRoomId,
     selectedWallId: ui.panelWallId || ui.locateWallId || ui.editingId,
     movingIds: ui.moving ? ui.moving.groupIds : null,
@@ -515,13 +580,13 @@ function drawPlan() {
 // whole-plan view is centred in it), so a screen fraction maps straight to it.
 function shownView() {
   if (ui.view) return { ...ui.view };
-  const fit = fitViewBox(state.rooms);
+  const fit = fitViewBox(levelRooms());
   const w = Math.max(fit.width, fit.height);
   return { x: fit.x - (w - fit.width) / 2, y: fit.y - (w - fit.height) / 2, w };
 }
 
 function clampViewWidth(w) {
-  const fit = fitViewBox(state.rooms);
+  const fit = fitViewBox(levelRooms());
   return Math.min(Math.max(w, 0.5), Math.max(fit.width, fit.height) * 1.5);
 }
 
@@ -622,6 +687,8 @@ function renderWallList() {
       });
       extras.push(Object.entries(counts).map(([t, n]) => `${n} ${t}${n > 1 ? 's' : ''}`).join(', '));
     }
+    const nFix = (wall.fixtures || []).reduce((sum, f) => sum + (f.qty || 1), 0);
+    if (nFix) extras.push(`${nFix} fixture${nFix > 1 ? 's' : ''}`);
     if (wall.ceilingHeightM) extras.push(`ceiling ${units.formatLength(wall.ceilingHeightM, state.unit)}`);
     const warn = openings.some((o) => !op.fitsOnWall(wall, o)) ? ' <span class="warn-text">⚠ check openings</span>' : '';
     li.innerHTML = `
@@ -658,6 +725,7 @@ function saveJob() {
     rooms: state.rooms,
     activeRoomId: state.activeRoomId,
     details: state.details,
+    levels: state.levels,
   });
   const t = new Date().toLocaleTimeString('en-AU', { hour: 'numeric', minute: '2-digit' });
   els.saveState.textContent = `Saved ✓ ${t}`;
@@ -669,7 +737,9 @@ function saveJob() {
 const history = { undo: [], redo: [], last: null };
 const HISTORY_MAX = 50;
 
-const jobSnapshot = () => JSON.stringify({ rooms: state.rooms, jobName: state.jobName, unit: state.unit, details: state.details });
+const jobSnapshot = () => JSON.stringify({
+  rooms: state.rooms, jobName: state.jobName, unit: state.unit, details: state.details, levels: state.levels,
+});
 
 function resetHistory() {
   history.undo = [];
@@ -714,6 +784,7 @@ function stepHistory(from, to) {
   state.jobName = data.jobName;
   state.unit = data.unit;
   state.details = data.details || {};
+  state.levels = data.levels || ['Ground floor'];
   state.activeRoomId = state.rooms.some((r) => r.id === target.activeRoomId) ? target.activeRoomId : state.rooms[0].id;
   stopPlacing();
   closeWallPanel();
@@ -722,6 +793,7 @@ function stepHistory(from, to) {
   resetEntryForm();
   buildLengthInputs();
   buildCeilingInput();
+  state.level = levelOf(activeRoom());
   saveJob();
   renderUndoButtons();
   render();
@@ -798,6 +870,36 @@ function settleSharedStart(room) {
 function flashInvalid() {
   els.addWallBtn.classList.add('invalid-shake');
   setTimeout(() => els.addWallBtn.classList.remove('invalid-shake'), 300);
+}
+
+// A question with a text box: resolves to the trimmed text, or null.
+function showPrompt(message, value = '') {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'jobs-panel confirm-overlay';
+    overlay.innerHTML = `
+      <div class="jobs-panel-inner confirm-inner">
+        <p class="confirm-message"></p>
+        <input type="text" class="panel-input prompt-input" />
+        <div class="confirm-actions">
+          <button type="button" class="secondary-btn confirm-cancel">Cancel</button>
+          <button type="button" class="primary-btn confirm-ok">OK</button>
+        </div>
+      </div>`;
+    overlay.querySelector('.confirm-message').textContent = message;
+    const input = overlay.querySelector('.prompt-input');
+    input.value = value;
+    document.body.appendChild(overlay);
+    input.focus();
+    input.select();
+    const finish = (ok) => {
+      overlay.remove();
+      resolve(ok ? input.value.trim() || null : null);
+    };
+    overlay.querySelector('.confirm-cancel').addEventListener('click', () => finish(false));
+    overlay.querySelector('.confirm-ok').addEventListener('click', () => finish(true));
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') finish(true); });
+  });
 }
 
 // A message with just an OK button.
@@ -913,6 +1015,8 @@ async function handleNewJob() {
   resetEntryForm();
   buildCeilingInput();
   state.details = { measuredBy: lastMeasuredBy() };
+  state.levels = ['Ground floor'];
+  state.level = 'Ground floor';
   resetHistory();
   render();
   openDetails(); // a new job starts with its name and address
@@ -925,6 +1029,7 @@ function applyJob(job) {
   state.jobName = job.name;
   state.unit = job.unit || 'mm';
   state.details = job.details || {};
+  state.levels = Array.isArray(job.levels) && job.levels.length ? [...job.levels] : ['Ground floor'];
   if (Array.isArray(job.rooms) && job.rooms.length > 0) {
     state.rooms = job.rooms;
   } else {
@@ -935,10 +1040,12 @@ function applyJob(job) {
   }
   rm.migrateSharedWallRooms(state.rooms);
   rm.numberRooms(state.rooms);
+  state.rooms.forEach((r) => { if (r.level && !state.levels.includes(r.level)) state.levels.push(r.level); });
   resetHistory();
   state.activeRoomId = state.rooms.some((r) => r.id === job.activeRoomId)
     ? job.activeRoomId
     : state.rooms[0].id;
+  state.level = levelOf(activeRoom());
 }
 
 
@@ -1072,6 +1179,8 @@ function openWallPanel(id) {
   els.panelLengthError.classList.add('hidden');
   fillKeepClosed();
   renderPhotoStrip(els.wallPhotos, activeRoom(), id);
+  hideFixtureForm();
+  renderFixtureList();
   buildLengthInput(els.wallThickInputs, state.unit, 'wallThick');
   setLength(state.unit, 'wallThick', rm.wallThickness(wall));
   els.wallThickAll.checked = false;
@@ -1372,11 +1481,12 @@ function renderRoomTabs() {
     const a = rm.roomClosed(room, geom.get(room.id)) ? rm.roomArea(room, geom.get(room.id)) : null;
     return a != null ? units.formatArea(a, state.unit) : '';
   };
-  if (state.rooms.length > 6) {
+  if (levelRooms().length > 6) {
     const select = document.createElement('select');
     select.className = 'room-select';
     select.setAttribute('aria-label', 'Room');
-    state.rooms.forEach((room, i) => {
+    levelRooms().forEach((room) => {
+      const i = roomIndex(room);
       const opt = document.createElement('option');
       opt.value = room.id;
       opt.textContent = [rm.roomLabel(room, i), areaOf(room)].filter(Boolean).join(' · ');
@@ -1385,7 +1495,8 @@ function renderRoomTabs() {
     });
     els.roomTabs.appendChild(select);
   } else {
-    state.rooms.forEach((room, i) => {
+    levelRooms().forEach((room) => {
+      const i = roomIndex(room);
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'room-tab' + (room.id === state.activeRoomId ? ' selected' : '');
@@ -1414,9 +1525,10 @@ function renderRoomCard() {
   els.roomName.placeholder = rm.roomLabel({ ...room, name: '' }, roomIndex(room));
   els.deleteRoomBtn.classList.toggle('hidden', state.rooms.length < 2);
   els.moveRoomBtn.classList.toggle('hidden', !canMove(room) || !!ui.moving);
-  const joined = room.walls.length ? rm.joinedRooms(state.rooms, rm.roomGeometry(state.rooms), room, true) : [];
+  const joined = room.walls.length ? rm.joinedRooms(levelRooms(), rm.roomGeometry(levelRooms()), room, true) : [];
   els.separateRoomBtn.classList.toggle('hidden', !joined.length || !!ui.moving);
   renderPhotoStrip(els.roomPhotos, room);
+  renderRoomDetails();
   const anchorText = anchorDescription(room);
   els.roomAnchorNote.textContent = anchorText;
   els.roomAnchorNote.classList.toggle('hidden', !anchorText);
@@ -1426,6 +1538,7 @@ function setActiveRoom(id) {
   if (!state.rooms.some((r) => r.id === id)) return;
   if (ui.moving) endMove(true);
   state.activeRoomId = id;
+  state.level = levelOf(state.rooms.find((r) => r.id === id));
   ui.insertAt = null;
   closeWallPanel();
   resetEntryForm();
@@ -1523,7 +1636,7 @@ function handleBreakWall() {
 async function handleSeparateRoom() {
   const room = activeRoom();
   const geom = rm.roomGeometry(state.rooms);
-  const joined = rm.joinedRooms(state.rooms, geom, room, true);
+  const joined = rm.joinedRooms(levelRooms(), geom, room, true);
   if (!joined.length) return;
   if (room.anchor && room.anchor.shared && !rm.roomClosed(room, geom.get(room.id))) {
     await showAlert(`Finish ${activeLabel()}'s walls back to the shared wall first, then separate it.`);
@@ -1536,6 +1649,200 @@ async function handleSeparateRoom() {
   rm.separateRoom(state.rooms, room);
   persist();
   render();
+}
+
+// ---------- services and fixtures on a wall ----------
+
+function renderFixtureList() {
+  const wall = panelWall();
+  const list = $('#fixtureList');
+  list.innerHTML = '';
+  if (!wall) return;
+  const items = wall.fixtures || [];
+  if (!items.length) {
+    list.innerHTML = '<li class="empty-note">No services or fixtures on this wall.</li>';
+    return;
+  }
+  const tags = fx.fixtureTags(allWalls());
+  const ends = planEnds(state.walls.indexOf(wall));
+  items.forEach((f) => {
+    const li = document.createElement('li');
+    li.className = 'wall-row';
+    const t = fx.fixtureType(f);
+    const fmt = (m) => units.formatLength(m, state.unit);
+    const bits = [`${fmt(f.offsetM)} from ${ends[f.fromCorner === 'end' ? 'end' : 'start']} end`];
+    if (f.widthM) bits.push(`${fmt(f.widthM)} long`);
+    if (f.heightM) bits.push(`${fmt(f.heightM)} AFL`);
+    const warn = fx.fixtureFits(wall, f) ? '' : ' <span class="warn-text">⚠ past end of wall</span>';
+    li.innerHTML = `
+      <div class="wall-idx">${tags[f.id]}</div>
+      <div class="wall-info">
+        <div class="wall-len">${f.qty > 1 ? `${f.qty} × ` : ''}${t.label}</div>
+        <div class="wall-dir">${bits.join(' · ')}${f.note ? ` · ${escapeHtml(f.note)}` : ''}${warn}</div>
+      </div>
+      <button class="edit-btn" data-fx-id="${f.id}" title="Edit">&#9998;</button>
+      <button class="delete-btn" data-fx-id="${f.id}" title="Delete">&#128465;</button>`;
+    list.appendChild(li);
+  });
+}
+
+function setFixtureTypeFields() {
+  const t = fx.FIXTURE_TYPES[$('#fixtureType').value] || fx.FIXTURE_TYPES.other;
+  $('#fixtureWidthRow').classList.toggle('hidden', !t.width);
+  $('#fixtureOffsetLabel').textContent = t.width ? 'Distance to its near end' : 'Distance to its centre';
+}
+
+function showFixtureForm(f) {
+  const wall = panelWall();
+  if (!wall) return;
+  ui.editingFixtureId = f ? f.id : null;
+  const typeSel = $('#fixtureType');
+  if (!typeSel.options.length) {
+    Object.entries(fx.FIXTURE_TYPES).forEach(([k, t]) => typeSel.add(new Option(t.label, k)));
+  }
+  const ends = planEnds(state.walls.indexOf(wall));
+  const endSel = $('#fixtureEnd');
+  const second = ends.first === 'start' ? 'end' : 'start';
+  endSel.options[0].value = ends.first;
+  endSel.options[0].textContent = `From the ${ends[ends.first]} end`;
+  endSel.options[1].value = second;
+  endSel.options[1].textContent = `From the ${ends[second]} end`;
+  buildLengthInput($('#fixtureOffsetInputs'), state.unit, 'fxOff');
+  buildLengthInput($('#fixtureWidthInputs'), state.unit, 'fxW');
+  buildLengthInput($('#fixtureHeightInputs'), state.unit, 'fxH', 'e.g. 300');
+  typeSel.value = f ? f.type : ui.lastFixtureType || 'gpo2';
+  endSel.value = f ? f.fromCorner : ends.first;
+  setLength(state.unit, 'fxOff', f ? f.offsetM : null);
+  setLength(state.unit, 'fxW', f && f.widthM ? f.widthM : null);
+  setLength(state.unit, 'fxH', f && f.heightM ? f.heightM : null);
+  $('#fixtureQty').value = f ? f.qty || 1 : 1;
+  $('#fixtureNote').value = f ? f.note || '' : '';
+  $('#fixtureError').classList.add('hidden');
+  setFixtureTypeFields();
+  $('#fixtureForm').classList.remove('hidden');
+  $('#addFixtureBtn').classList.add('hidden');
+  $('#fixtureForm').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function hideFixtureForm() {
+  ui.editingFixtureId = null;
+  $('#fixtureForm').classList.add('hidden');
+  $('#addFixtureBtn').classList.remove('hidden');
+}
+
+function handleSaveFixture() {
+  const wall = panelWall();
+  if (!wall) return;
+  const err = (msg) => {
+    $('#fixtureError').textContent = msg;
+    $('#fixtureError').classList.remove('hidden');
+  };
+  const type = $('#fixtureType').value;
+  const t = fx.FIXTURE_TYPES[type];
+  const offsetM = readLength(state.unit, 'fxOff', { allowZero: true });
+  if (offsetM == null) return err('Enter how far along the wall it is.');
+  const widthM = t.width ? readLength(state.unit, 'fxW') : null;
+  const heightM = readLength(state.unit, 'fxH', { allowZero: true });
+  const f = {
+    id: ui.editingFixtureId || uid().replace(/^w_/, 'f_'),
+    type,
+    fromCorner: $('#fixtureEnd').value,
+    offsetM,
+    qty: Math.max(1, Math.round(Number($('#fixtureQty').value) || 1)),
+    note: $('#fixtureNote').value.trim(),
+  };
+  if (widthM) f.widthM = widthM;
+  if (heightM != null) f.heightM = heightM;
+  if (!fx.fixtureFits(wall, f)) return err(`That's past the end of the wall (${units.formatLength(wall.lengthM, state.unit)}).`);
+  const list = wall.fixtures || [];
+  const at = list.findIndex((x) => x.id === f.id);
+  wall.fixtures = at >= 0 ? list.map((x) => (x.id === f.id ? f : x)) : [...list, f];
+  ui.lastFixtureType = type;
+  hideFixtureForm();
+  persist();
+  renderFixtureList();
+  drawPlan();
+  renderWallList();
+}
+
+async function handleDeleteFixture(id) {
+  const wall = panelWall();
+  if (!wall) return;
+  const tag = fx.fixtureTags(allWalls())[id];
+  if (!(await showConfirm(`Delete ${tag}?`))) return;
+  wall.fixtures = (wall.fixtures || []).filter((f) => f.id !== id);
+  persist();
+  renderFixtureList();
+  drawPlan();
+  renderWallList();
+}
+
+// ---------- room details ----------
+
+const ROOM_DETAIL_FIELDS = { rdFloor: 'floor', rdCeiling: 'ceiling', rdCeilingNotes: 'ceilingNotes', rdWalls: 'walls', rdNotes: 'notes' };
+
+function renderRoomDetails() {
+  const d = activeRoom().details || {};
+  Object.entries(ROOM_DETAIL_FIELDS).forEach(([id, key]) => {
+    const input = $(`#${id}`);
+    if (document.activeElement !== input) input.value = d[key] || '';
+  });
+}
+
+function saveRoomDetails() {
+  const room = activeRoom();
+  const d = {};
+  Object.entries(ROOM_DETAIL_FIELDS).forEach(([id, key]) => {
+    const v = $(`#${id}`).value.trim();
+    if (v) d[key] = v;
+  });
+  if (Object.keys(d).length) room.details = d;
+  else delete room.details;
+  persist();
+}
+
+// ---------- Bluetooth laser ----------
+// A reading goes into the length box last used (wall length unless another
+// was picked), as if typed.
+
+ui.laserTarget = null; // id prefix of the length box last focused
+document.addEventListener('focusin', (e) => {
+  const input = e.target.closest && e.target.closest('.length-inputs input');
+  if (input) ui.laserTarget = input.id.replace(/(Single|Feet|Inches)$/, '');
+});
+
+function laserReading(m) {
+  let prefix = ui.laserTarget;
+  const exists = prefix && ($(`#${prefix}Single`) || $(`#${prefix}Feet`));
+  const visible = exists && exists.offsetParent !== null;
+  if (!visible) prefix = 'len';
+  setLength(state.unit, prefix, m);
+  const box = $(`#${prefix}Single`) || $(`#${prefix}Feet`);
+  box.dispatchEvent(new Event('input', { bubbles: true }));
+  box.classList.add('laser-filled');
+  setTimeout(() => box.classList.remove('laser-filled'), 900);
+  $('#laserBtn').textContent = `📏 ${units.formatLength(m, state.unit)} ✓`;
+}
+
+async function handleLaserBtn() {
+  const btn = $('#laserBtn');
+  if (ui.laserName) {
+    laser.disconnectLaser();
+    return;
+  }
+  btn.textContent = '📏 Connecting…';
+  try {
+    ui.laserName = await laser.connectLaser(laserReading, () => {
+      ui.laserName = null;
+      btn.textContent = '📏 Connect laser';
+      btn.classList.remove('connected');
+    });
+    btn.textContent = `📏 ${ui.laserName} connected`;
+    btn.classList.add('connected');
+  } catch (err) {
+    btn.textContent = '📏 Connect laser';
+    if (err && err.name !== 'NotFoundError') showAlert(`Couldn't connect the laser: ${err.message}`);
+  }
 }
 
 // ---------- job details, site mode ----------
@@ -1780,7 +2087,7 @@ function startMove() {
   if (!canMove(room)) return;
   closeWallPanel();
   const geom = rm.roomGeometry(state.rooms);
-  const group = rm.joinedRooms(state.rooms, geom, room);
+  const group = rm.joinedRooms(levelRooms(), geom, room);
   const roots = rm.groupRoots(group);
   ui.moving = {
     roomId: room.id,
@@ -1831,7 +2138,7 @@ function endMove(keep) {
 function updateMoveDims() {
   const room = movingRoom();
   if (!room) return;
-  const ref = rm.nearestFacingWall(state.rooms, rm.roomGeometry(state.rooms), ui.moving.groupIds);
+  const ref = rm.nearestFacingWall(levelRooms(), rm.roomGeometry(levelRooms()), ui.moving.groupIds);
   ui.moving.ref = null;
   if (ui.moving.dimsUnit !== state.unit) {
     buildLengthInput(els.moveGapInputs, state.unit, 'mvGap');
@@ -1975,7 +2282,7 @@ function openDoorMatch() {
   if (!room) return;
   const group = movingGroup();
   const here = group.flatMap(doorwaysOf);
-  const there = state.rooms.filter((r) => !group.includes(r)).flatMap(doorwaysOf);
+  const there = levelRooms().filter((r) => !group.includes(r)).flatMap(doorwaysOf);
   const fill = (select, list, withRoom) => {
     select.innerHTML = '';
     list.forEach((d) => {
@@ -2083,7 +2390,7 @@ function placementFromTap(pt) {
   const vb = els.planSvg.viewBox.baseVal;
   const reach = Math.max(vb.width, vb.height) * 0.045; // a label's height, as in render.js
   let best = null;
-  state.rooms.forEach((room) => {
+  levelRooms().forEach((room) => {
     const pts = pointsById.get(room.id);
     room.walls.forEach((wall, i) => {
       const a = pts[i];
@@ -2218,6 +2525,7 @@ function createRoom(anchor, walls = []) {
   stopPlacing();
   const room = rm.newRoom(anchor);
   room.number = rm.nextRoomNumber(state.rooms);
+  room.level = state.level;
   room.walls = walls;
   // ceiling heights rarely change through a job: start from the last one set
   const lastCeiling = [...state.rooms].reverse().find((r) => r.ceilingHeightM);
@@ -2234,7 +2542,7 @@ async function handleDeleteRoom() {
   if (!ok) return;
   rm.pinAttachedRooms(state.rooms, (a) => a.roomId === room.id);
   state.rooms = state.rooms.filter((r) => r.id !== room.id);
-  setActiveRoom(state.rooms[0].id);
+  setActiveRoom((levelRooms()[0] || state.rooms[0]).id);
 }
 
 // ---------- event wiring ----------
@@ -2299,6 +2607,7 @@ els.exportBtn.addEventListener('click', () => {
 const closeExport = () => els.exportPanel.classList.add('hidden');
 const currentJob = () => ({
   id: state.jobId, name: state.jobName, unit: state.unit, rooms: state.rooms, activeRoomId: state.activeRoomId, details: state.details,
+  levels: state.levels,
 });
 function exportFailed(message) {
   els.exportError.textContent = message;
@@ -2530,7 +2839,7 @@ const endDrag = () => {
   ui.moving.drag = null;
   ui.moving.viewBox = null;
   const room = movingRoom();
-  const snap = room && rm.snapOffset(state.rooms, rm.roomGeometry(state.rooms), ui.moving.groupIds, rm.DEFAULT_WALL_THICKNESS_M);
+  const snap = room && rm.snapOffset(levelRooms(), rm.roomGeometry(levelRooms()), ui.moving.groupIds, rm.DEFAULT_WALL_THICKNESS_M);
   if (snap) shiftGroup(snap.dx, snap.dy);
   render();
 };
@@ -2563,7 +2872,7 @@ els.planSvg.addEventListener('click', (e) => {
 function roomAtPoint(pt) {
   const geom = rm.roomGeometry(state.rooms);
   let best = null;
-  state.rooms.forEach((room) => {
+  levelRooms().forEach((room) => {
     const pts = geom.get(room.id).points;
     if (pts.length < 3) return;
     let inside = false;
@@ -2682,6 +2991,23 @@ els.createRoomBtn.addEventListener('click', handleCreateRoom);
 els.moveRoomBtn.addEventListener('click', startMove);
 els.separateRoomBtn.addEventListener('click', handleSeparateRoom);
 els.breakWallBtn.addEventListener('click', handleBreakWall);
+$('#laserBtn').addEventListener('click', handleLaserBtn);
+$('#laserBtn').classList.toggle('hidden', !laser.laserSupported());
+$('#levelSelect').addEventListener('change', (e) => switchLevel(e.target.value));
+$('#addLevelBtn').addEventListener('click', handleAddLevel);
+$('#renameLevelBtn').addEventListener('click', handleRenameLevel);
+$('#addFixtureBtn').addEventListener('click', () => showFixtureForm(null));
+$('#cancelFixtureBtn').addEventListener('click', hideFixtureForm);
+$('#saveFixtureBtn').addEventListener('click', handleSaveFixture);
+$('#fixtureType').addEventListener('change', setFixtureTypeFields);
+$('#fixtureList').addEventListener('click', (e) => {
+  const edit = e.target.closest('.edit-btn');
+  const del = e.target.closest('.delete-btn');
+  const wall = panelWall();
+  if (edit && wall) showFixtureForm((wall.fixtures || []).find((f) => f.id === edit.dataset.fxId));
+  else if (del) handleDeleteFixture(del.dataset.fxId);
+});
+Object.keys(ROOM_DETAIL_FIELDS).forEach((id) => $(`#${id}`).addEventListener('change', saveRoomDetails));
 els.spreadGapBtn.addEventListener('click', handleSpreadGap);
 $('#diagCheckBtn').addEventListener('click', handleDiagCheck);
 els.diagFixBtn.addEventListener('click', handleDiagFix);

@@ -1,6 +1,7 @@
 import { boundingBox } from './geometry.js';
 import { formatLength, formatArea } from './units.js';
 import { openingSpan, openingTags } from './openings.js';
+import { fixtureSpan, fixtureTags } from './fixtures.js';
 import {
   roomGeometry, closingGap, polygonArea, insideSign as roomInsideSign, roomLabel, wallMerges, DEFAULT_WALL_THICKNESS_M, wallThickness,
 } from './rooms.js';
@@ -78,12 +79,13 @@ export function renderPlan(svg, rooms, unit, {
   const strokeWidth = Math.max(width, height) * (print ? 0.005 : 0.012);
   const fontSize = Math.max(width, height) * (print ? 0.024 : 0.045);
   const tags = openingTags(rooms.flatMap((r) => r.walls));
+  const fxTags = fixtureTags(rooms.flatMap((r) => r.walls));
 
   const hitGroup = el('g');
   // shared stretches and doorways of the room being worked on, drawn undimmed on top
   const brightGroup = el('g', { class: 'plan-room active' });
   const merges = wallMerges(rooms, geom);
-  const ctx = { unit, strokeWidth, fontSize, tags, selectedWallId, hitGroup, print, merges, brightGroup, activeRoomId, movingIds };
+  const ctx = { unit, strokeWidth, fontSize, tags, fxTags, selectedWallId, hitGroup, print, merges, brightGroup, activeRoomId, movingIds };
 
   if (print) {
     rooms.forEach((r, i) => drawRoom(svg, r, i, geom.get(r.id), true, ctx));
@@ -374,6 +376,34 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
     (merges.extras.get(key) || []).forEach((x) => {
       const target = !active && !print && x.fromRoomId === activeRoomId ? brightGroup : group;
       drawOpening(target, x.opening, { startM: x.startM, endM: x.endM }, -insideSign);
+    });
+
+    // services and fixtures: a dot (or a bar along the wall for one with a
+    // length) just inside the room, tagged further in
+    (w.fixtures || []).forEach((f) => {
+      const [f0, f1] = fixtureSpan(w, f);
+      const inX = nx * insideSign;
+      const inY = ny * insideSign;
+      const inset = fontSize * 0.4;
+      const at = (m, d) => { const p = along(m); return { x: p.x + inX * d, y: p.y + inY * d }; };
+      if (f1 - f0 > 0.001) {
+        const p = at(f0, inset);
+        const q = at(f1, inset);
+        group.appendChild(el('line', { x1: p.x, y1: p.y, x2: q.x, y2: q.y, class: 'plan-fixture-line', 'stroke-width': strokeWidth * 0.5 }));
+      }
+      const c = at((f0 + f1) / 2, inset);
+      group.appendChild(el('circle', { cx: c.x, cy: c.y, r: fontSize * 0.18, class: 'plan-fixture' }));
+      const t = at((f0 + f1) / 2, inset + fontSize * 0.7);
+      const label = el('text', {
+        x: t.x, y: t.y,
+        'text-anchor': 'middle',
+        'dominant-baseline': 'central',
+        'font-size': fontSize * 0.5,
+        transform: `rotate(${textAngle}, ${t.x}, ${t.y})`,
+        class: 'plan-fixture-label',
+      });
+      label.textContent = `${f.qty > 1 ? `${f.qty}×` : ''}${ctx.fxTags[f.id]}`;
+      group.appendChild(label);
     });
 
     if (active) {

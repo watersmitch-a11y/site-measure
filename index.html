@@ -40,6 +40,11 @@
   </header>
 
   <main>
+    <div id="levelBar" class="level-bar">
+      <select id="levelSelect" class="level-select" aria-label="Level"></select>
+      <button id="addLevelBtn" type="button" class="text-btn">+ Level</button>
+      <button id="renameLevelBtn" type="button" class="text-btn">Rename</button>
+    </div>
     <div id="roomTabs" class="room-tabs"></div>
 
     <div id="placeBanner" class="place-banner hidden">
@@ -135,7 +140,9 @@
       </div>
 
       <div class="length-section">
-        <div class="field-label">Wall length</div>
+        <div class="field-label length-label">Wall length
+          <button id="laserBtn" type="button" class="text-btn laser-btn hidden">&#128207; Connect laser</button>
+        </div>
         <div id="lengthInputs" class="length-inputs"></div>
         <div id="matchChips" class="preset-chips match-chips"></div>
       </div>
@@ -165,6 +172,22 @@
       <div id="roomAnchorNote" class="anchor-note hidden"></div>
       <div class="field-label">Ceiling height</div>
       <div id="ceilingInputs" class="length-inputs"></div>
+      <details id="roomDetails" class="room-extra">
+        <summary>Room details (finishes, notes)</summary>
+        <div class="field-label">Floor finish</div>
+        <input id="rdFloor" type="text" class="panel-input" list="floorFinishes" placeholder="e.g. vinyl, carpet tiles" />
+        <div class="field-label">Ceiling type</div>
+        <input id="rdCeiling" type="text" class="panel-input" list="ceilingTypes" placeholder="e.g. plasterboard, 1200×600 grid" />
+        <div class="field-label">Bulkheads, raked or stepped ceilings</div>
+        <input id="rdCeilingNotes" type="text" class="panel-input" placeholder="e.g. 300 bulkhead along top wall at 2400" />
+        <div class="field-label">Wall finish</div>
+        <input id="rdWalls" type="text" class="panel-input" list="wallFinishes" placeholder="e.g. painted plasterboard, tiled to 1200" />
+        <div class="field-label">Notes</div>
+        <textarea id="rdNotes" class="panel-input" rows="3" placeholder="Condition, scope, access, anything else"></textarea>
+        <datalist id="floorFinishes"><option value="Carpet"><option value="Carpet tiles"><option value="Vinyl sheet"><option value="Vinyl planks"><option value="Ceramic tiles"><option value="Timber"><option value="Polished concrete"><option value="Epoxy"><option value="Safety vinyl"></datalist>
+        <datalist id="ceilingTypes"><option value="Plasterboard"><option value="Suspended grid 1200×600"><option value="Suspended grid 600×600"><option value="Exposed slab"><option value="Exposed structure"><option value="Timber lining"><option value="Fibre cement"></datalist>
+        <datalist id="wallFinishes"><option value="Painted plasterboard"><option value="Tiled"><option value="Painted block"><option value="Face brick"><option value="Wallpaper"><option value="FRP / hygienic panel"></datalist>
+      </details>
       <details id="squareCheck" class="room-extra hidden">
         <summary>Squareness check (diagonal)</summary>
         <div class="diag-row">
@@ -386,6 +409,40 @@
           <button type="submit" id="saveOpeningBtn" class="primary-btn">Save Opening</button>
         </div>
       </form>
+
+      <div class="panel-section">
+        <div class="wall-list-header">
+          <h3>Services &amp; fixtures</h3>
+        </div>
+        <ul id="fixtureList" class="wall-list"></ul>
+        <button id="addFixtureBtn" type="button" class="secondary-btn">+ Add fixture</button>
+        <div id="fixtureForm" class="opening-form hidden">
+          <div class="field-label">Type</div>
+          <select id="fixtureType" class="panel-select"></select>
+          <div class="field-label">Measured from</div>
+          <select id="fixtureEnd" class="panel-select">
+            <option value="start">From the left end</option>
+            <option value="end">From the right end</option>
+          </select>
+          <div id="fixtureOffsetLabel" class="field-label">Distance to its centre</div>
+          <div id="fixtureOffsetInputs" class="length-inputs"></div>
+          <div id="fixtureWidthRow">
+            <div class="field-label">Length along the wall</div>
+            <div id="fixtureWidthInputs" class="length-inputs"></div>
+          </div>
+          <div class="field-label">Height above floor (optional)</div>
+          <div id="fixtureHeightInputs" class="length-inputs"></div>
+          <div class="field-label">How many (e.g. 2 for two side by side)</div>
+          <input id="fixtureQty" type="number" min="1" step="1" value="1" class="panel-input" inputmode="numeric" />
+          <div class="field-label">Note (optional)</div>
+          <input id="fixtureNote" type="text" class="panel-input" placeholder="e.g. existing, to be relocated" />
+          <p id="fixtureError" class="error-text hidden"></p>
+          <div class="confirm-actions">
+            <button type="button" id="cancelFixtureBtn" class="secondary-btn">Cancel</button>
+            <button type="button" id="saveFixtureBtn" class="primary-btn">Save Fixture</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'site-measure-v32';
+const CACHE_NAME = 'site-measure-v33';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -15,6 +15,8 @@ const CORE_ASSETS = [
   './js/dxf.js',
   './js/jobfile.js',
   './js/photos.js',
+  './js/fixtures.js',
+  './js/laser.js',
   './manifest.json',
 ];
 

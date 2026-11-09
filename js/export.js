@@ -6,6 +6,7 @@ import * as units from './units.js';
 import * as geo from './geometry.js';
 import * as op from './openings.js';
 import * as rm from './rooms.js';
+import * as fx from './fixtures.js';
 
 function esc(str) {
   const d = document.createElement('div');
@@ -34,9 +35,16 @@ export async function exportPlan(job, { planEnds, wallName = (i) => `wall ${i + 
   const fmt = (m) => units.formatLength(m, unit);
   const area = (m2) => units.formatArea(m2, unit);
   const geom = rm.roomGeometry(rooms);
-  const merges = rm.wallMerges(rooms, geom);
+  // levels: each is drawn on its own, and walls only merge within a level
+  const levels = job.levels && job.levels.length ? job.levels : ['Ground floor'];
+  const levelOf = (r) => (r.level && levels.includes(r.level) ? r.level : levels[0]);
+  const byLevel = levels.map((name) => ({ name, rooms: rooms.filter((r) => levelOf(r) === name) }))
+    .filter((l) => l.rooms.some((r) => r.walls.length));
+  const merges = { sameAs: new Map() };
+  byLevel.forEach((l) => rm.wallMerges(l.rooms, geom).sameAs.forEach((v, k) => merges.sameAs.set(k, v)));
   const tagOwner = new Map(rooms.flatMap((r) => r.walls.flatMap((w) => (w.openings || []).map((o) => [o.id, r]))));
   const tags = op.openingTags(rooms.flatMap((r) => r.walls));
+  const fxTags = fx.fixtureTags(rooms.flatMap((r) => r.walls));
   const measured = rooms.filter((r) => rm.roomArea(r, geom.get(r.id)) != null);
   const totalArea = measured.reduce((sum, r) => sum + rm.roomArea(r, geom.get(r.id)), 0);
 
@@ -85,6 +93,16 @@ export async function exportPlan(job, { planEnds, wallName = (i) => `wall ${i + 
         `<td>${op.MEASURED_TO[o.measuredTo] || ''}</td><td>${esc(details.join(' · '))}</td></tr>`;
     })).join('');
 
+    const fixtureRows = room.walls.flatMap((w, i) => (w.fixtures || []).map((f) => {
+      const ends = planEnds(i, room);
+      const where = `${wallName(i, room)} wall, ${fmt(f.offsetM)} from ${ends[f.fromCorner === 'end' ? 'end' : 'start']} end`;
+      return `<tr><td>${fxTags[f.id]}</td><td>${esc(fx.fixtureType(f).label)}</td><td>${f.qty || 1}</td>` +
+        `<td>${esc(where)}${f.widthM ? `, ${fmt(f.widthM)} long` : ''}</td><td>${f.heightM != null ? fmt(f.heightM) : ''}</td><td>${esc(f.note || '')}</td></tr>`;
+    })).join('');
+    const d = room.details || {};
+    const detailRows = [['Floor', d.floor], ['Walls', d.walls], ['Ceiling', d.ceiling], ['Ceiling notes', d.ceilingNotes], ['Notes', d.notes]]
+      .filter(([, v]) => v).map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`).join('');
+
     const photoFigures = (room.photos || []).map((p) => {
       const idx = p.wallId ? room.walls.findIndex((w) => w.id === p.wallId) : -1;
       const where = idx >= 0 ? `${wallName(idx, room)} wall` : 'Room';
@@ -93,13 +111,16 @@ export async function exportPlan(job, { planEnds, wallName = (i) => `wall ${i + 
     }).join('');
 
     return `<section>
-      <h2>${esc(rm.roomLabel(room, ri))}</h2>
+      <h2>${esc(rm.roomLabel(room, ri))}${byLevel.length > 1 ? ` <small>· ${esc(levelOf(room))}</small>` : ''}</h2>
       <p class="room-summary">${summary}</p>
       ${sharedNote}
+      ${detailRows ? `<table class="title-block"><tbody>${detailRows}</tbody></table>` : ''}
       <h3>Walls</h3>
       <table><thead><tr><th>#</th><th>Length</th><th>Direction</th><th>Notes</th></tr></thead><tbody>${wallRows}</tbody></table>
       ${openingRows ? `<h3>Openings</h3>
       <table><thead><tr><th>Tag</th><th>Type</th><th>W × H</th><th>Position</th><th>Measured to</th><th>Details</th></tr></thead><tbody>${openingRows}</tbody></table>` : ''}
+      ${fixtureRows ? `<h3>Services &amp; fixtures</h3>
+      <table><thead><tr><th>Tag</th><th>Item</th><th>Qty</th><th>Position</th><th>Height AFL</th><th>Note</th></tr></thead><tbody>${fixtureRows}</tbody></table>` : ''}
       ${photoFigures ? `<h3>Photos</h3><div class="print-photos">${photoFigures}</div>` : ''}
     </section>`;
   }).join('');
@@ -110,10 +131,11 @@ export async function exportPlan(job, { planEnds, wallName = (i) => `wall ${i + 
     <h1>${esc(job.name)}</h1>
     <p class="print-meta">Site measure · ${date} · ${units.UNIT_LABELS[unit]}</p>
     ${titleBlock(job.details)}
-    <div class="print-plan"><svg viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet"></svg></div>
+    ${byLevel.map((l, i) => `${byLevel.length > 1 ? `<h2 class="level-title">${esc(l.name)}</h2>` : ''}
+    <div class="print-plan" data-level="${i}"><svg viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet"></svg></div>`).join('')}
     ${measured.length > 1 ? `<p class="job-total">Total floor area ${area(totalArea)} (${measured.length} rooms)</p>` : ''}
     ${roomSections}`;
-  renderPlan(view.querySelector('svg'), rooms, unit, { print: true });
+  byLevel.forEach((l, i) => renderPlan(view.querySelector(`.print-plan[data-level="${i}"] svg`), l.rooms, unit, { print: true }));
 
   // photos have to be loaded before the print screen takes its copy
   const imgs = [...view.querySelectorAll('img[data-photo]')];
