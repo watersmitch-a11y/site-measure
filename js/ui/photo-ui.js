@@ -3,7 +3,8 @@
 import * as photos from '../photos.js';
 import * as rm from '../rooms.js';
 import { activeRoom, els, roomIndex, state, ui } from './core.js';
-import { persist } from './history.js';
+import { flushPending, history, persist, saveSoon } from './history.js';
+import * as store from '../storage.js';
 import { renderRoomCard } from './room-ui.js';
 import { roomSide } from './walls.js';
 import { showAlert, showConfirm } from './dialogs.js';
@@ -86,12 +87,40 @@ export function closePhoto() {
   if (!open) return;
   const room = state.rooms.find((r) => r.id === open.roomId);
   const p = room && (room.photos || []).find((x) => x.id === open.id);
+  flushPending();
   if (p && p.note !== els.photoNote.value.trim()) {
     p.note = els.photoNote.value.trim();
-    persist();
+    persist(`photo-note:${p.id}`);
   }
   renderRoomCard();
   if (ui.panelWallId) renderPhotoStrip(els.wallPhotos, activeRoom(), ui.panelWallId);
+}
+
+// Pictures no job uses any more (a deleted photo, or a deleted job's) are
+// removed from the phone. Ones an undo step could still bring back are kept.
+export async function cleanUpPhotos() {
+  try {
+    const keep = new Set();
+    const note = (text) => (text.match(/"id":"(p_[^"]+)"/g) || []).forEach((m) => keep.add(m.slice(6, -1)));
+    store.listJobs().forEach((j) => note(localStorage.getItem(`siteMeasure.job.${j.id}`) || ''));
+    note(JSON.stringify(state.rooms));
+    [...history.undo, ...history.redo, history.last].forEach((h) => h && note(h.key));
+    const ids = await photos.listPhotoIds();
+    await Promise.all(ids.filter((id) => !keep.has(id)).map((id) => photos.deletePhoto(id)));
+    return ids.length - keep.size;
+  } catch {
+    return 0; // nothing lost by leaving them for next time
+  }
+}
+
+// The note is saved as it's typed.
+export function typePhotoNote() {
+  const open = ui.photo;
+  if (!open) return;
+  const room = state.rooms.find((r) => r.id === open.roomId);
+  const p = room && (room.photos || []).find((x) => x.id === open.id);
+  const note = els.photoNote.value.trim();
+  if (p) saveSoon(`photo-note:${p.id}`, () => { p.note = note; });
 }
 
 export async function deleteOpenPhoto() {

@@ -329,6 +329,7 @@ const tests = [
       await page.click('#closeWallPanelBtn');
       assert.deepEqual(await texts(page, '.plan-fixture-label'), ['2×DGPO1']);
 
+      await page.click('#addAnywayBtn'); // the room's closed, so the wall form is tucked away
       await page.click('#laserBtn');
       await page.waitForFunction(() => document.querySelector('#laserBtn').textContent.includes('connected'));
       await page.evaluate(() => window.__laserSend(2.345));
@@ -406,6 +407,123 @@ const tests = [
       assert.equal(await page.isVisible('#zoomFitBtn'), true);
       await page.click('#zoomFitBtn');
       assert.equal(await page.isVisible('#zoomFitBtn'), false);
+    },
+  },
+  {
+    name: 'a full phone storage is reported, not silently lost',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 4, 3), anchor: null }] });
+      await page.evaluate(() => {
+        window.__realSetItem = Storage.prototype.setItem;
+        Storage.prototype.setItem = function () { throw new DOMException('full', 'QuotaExceededError'); };
+      });
+      await page.click('#roomDetails summary');
+      await page.fill('#rdFloor', 'Carpet');
+      await page.waitForSelector('.confirm-message');
+      assert.match(await page.textContent('.confirm-message'), /storage for this app is full/);
+      await confirm(page);
+      assert.match(await page.textContent('#saveState'), /Not saved/);
+      await page.evaluate(() => { Storage.prototype.setItem = window.__realSetItem; });
+      await page.fill('#rdFloor', 'Carpet tiles');
+      await page.waitForFunction(() => /Saved ✓/.test(document.querySelector('#saveState').textContent));
+    },
+  },
+  {
+    name: 'PDF wall lengths keep clear of opening and fixture tags',
+    async run({ page, assert }) {
+      const win = { id: 'w1', type: 'window', measuredTo: 'plaster', fromCorner: 'start', offsetM: 0.9, widthM: 1.2, heightM: 1.2, sillM: 0.9 };
+      const walls = rect('r1', 4, 3, { c: [win] });
+      walls[1].fixtures = [{ id: 'f1', type: 'gpo2', fromCorner: 'start', offsetM: 2, qty: 1 }];
+      await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls, anchor: null }] });
+      await page.click('#exportBtn');
+      await page.click('#exportPdfBtn');
+      await page.waitForFunction(() => window.__printed === 1);
+      await page.emulateMedia({ media: 'print' });
+      const clashes = await page.evaluate(() => {
+        const t = [...document.querySelectorAll('#printView svg text')].map((e) => ({ s: e.textContent, r: e.getBoundingClientRect() }));
+        const hits = [];
+        t.forEach((a, i) => t.slice(i + 1).forEach((c) => {
+          if (a.r.left < c.r.right && c.r.left < a.r.right && a.r.top < c.r.bottom && c.r.top < a.r.bottom) hits.push(`${a.s} / ${c.s}`);
+        }));
+        return { hits, count: t.length, sized: t.every((x) => x.r.width > 0) };
+      });
+      await page.emulateMedia({ media: 'screen' });
+      assert.ok(clashes.count > 5 && clashes.sized, 'labels measured');
+      assert.deepEqual(clashes.hits, []);
+    },
+  },
+  {
+    name: 'a closed room says so instead of offering another wall',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 4, 3), anchor: null }] });
+      assert.match(await page.textContent('#entryTitle'), /closed ✓/);
+      assert.equal(await page.isVisible('#addWallBtn'), false);
+      await page.click('#addAnywayBtn');
+      assert.equal(await page.isVisible('#addWallBtn'), true);
+      await page.click('#wallList .edit-btn >> nth=0');
+      assert.match(await page.textContent('#entryTitle'), /Editing Wall 1/);
+    },
+  },
+  {
+    name: 'notes save as they are typed, as one undo step',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 4, 3), anchor: null }] });
+      await page.click('#roomDetails summary');
+      await page.type('#rdNotes', 'Damp under window', { delay: 20 });
+      await page.waitForFunction(() => {
+        const idx = JSON.parse(localStorage.getItem('siteMeasure.jobIndex'));
+        const j = JSON.parse(localStorage.getItem(`siteMeasure.job.${idx[0].id}`));
+        return j.rooms[0].details && j.rooms[0].details.notes === 'Damp under window';
+      });
+      // the phone locking saves straight away
+      await page.type('#rdNotes', '!', { delay: 0 });
+      await page.evaluate(() => {
+        Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      assert.equal((await saved(page)).rooms[0].details.notes, 'Damp under window!');
+      await page.evaluate(() => { delete document.visibilityState; });
+      await page.click('#undoActionBtn');
+      assert.equal((await saved(page)).rooms[0].details, undefined, 'one undo takes the whole note away');
+    },
+  },
+  {
+    name: 'photos no job uses are cleaned up',
+    async run({ page, tmp, assert }) {
+      await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 4, 3), anchor: null }] });
+      const png = path.join(tmp, 'tiny2.png');
+      fs.writeFileSync(png, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAFWEXHbQSACj/P8Fu7N9hAAAAAElFTkSuQmCC', 'base64'));
+      await page.setInputFiles('#roomPhotoInput', png);
+      await page.waitForSelector('#photoViewer:not(.hidden)');
+      await page.click('#donePhotoBtn');
+      const count = () => page.evaluate(() => import('./js/photos.js').then((m) => m.listPhotoIds()).then((k) => k.length));
+      assert.equal(await count(), 1);
+      // delete the job: its photo goes
+      await page.click('#jobsBtn');
+      await page.click('#jobsList .delete-btn');
+      await confirm(page);
+      await page.waitForFunction(() => import('./js/photos.js').then((m) => m.listPhotoIds()).then((k) => k.length === 0));
+    },
+  },
+  {
+    name: 'empty levels can be deleted and leave no stray rooms',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 4, 3), anchor: null }] });
+      assert.equal(await page.isVisible('#deleteLevelBtn'), false);
+      await page.click('#addLevelBtn');
+      await page.fill('.prompt-input', 'Level 1');
+      await confirm(page);
+      assert.equal(await page.isVisible('#deleteLevelBtn'), true);
+      await page.selectOption('#levelSelect', 'Ground floor');
+      let job = await saved(page);
+      assert.equal(job.rooms.length, 1, 'the unused room on Level 1 went');
+      await page.selectOption('#levelSelect', 'Level 1');
+      await page.click('#deleteLevelBtn');
+      await confirm(page);
+      job = await saved(page);
+      assert.deepEqual(job.levels, ['Ground floor']);
+      assert.equal(job.rooms.length, 1);
+      assert.equal(await page.inputValue('#levelSelect'), 'Ground floor');
     },
   },
   {

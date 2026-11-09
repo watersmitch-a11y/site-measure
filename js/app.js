@@ -6,6 +6,7 @@ import { SITE_MODE_KEY, applyJob, setSiteMode } from './ui/jobs.js';
 import { buildCeilingInput, buildLengthInputs, setCustomSide, setSelectedHeading } from './ui/entry.js';
 import { history, persist, resetHistory } from './ui/history.js';
 import { render } from './ui/view.js';
+import { cleanUpPhotos } from './ui/photo-ui.js';
 import './ui/events.js'; // wires up the page
 
 function init() {
@@ -26,6 +27,7 @@ function init() {
   buildCeilingInput();
   if (!history.last) resetHistory();
   render();
+  cleanUpPhotos(); // in the background: tidies photos left by deleted jobs
 
   els.appVersion.textContent = `Site Measure v${APP_VERSION}`;
   try { setSiteMode(localStorage.getItem(SITE_MODE_KEY) === '1'); } catch { /* default look */ }

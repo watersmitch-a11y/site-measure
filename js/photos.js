@@ -32,6 +32,7 @@ function run(mode, fn) {
 export const putPhoto = (id, blob) => run('readwrite', (s) => s.put(blob, id));
 export const getPhoto = (id) => run('readonly', (s) => s.get(id));
 export const deletePhoto = (id) => run('readwrite', (s) => s.delete(id));
+export const listPhotoIds = () => run('readonly', (s) => s.getAllKeys());
 
 // A phone photo scaled down to at most `max` pixels on its long side, as a
 // JPEG: plenty for a site record, and a fraction of the size.

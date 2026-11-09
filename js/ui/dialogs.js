@@ -55,16 +55,14 @@ export function showConfirm(message, { okOnly = false } = {}) {
         </div>
       </div>`;
     overlay.querySelector('.confirm-message').textContent = message;
-    if (okOnly) {
-      overlay.querySelector('.confirm-cancel').remove();
-      overlay.querySelector('.confirm-ok').textContent = 'OK';
-    }
+    if (okOnly) overlay.querySelector('.confirm-ok').textContent = 'OK';
     document.body.appendChild(overlay);
     const finish = (result) => {
       overlay.remove();
       resolve(result);
     };
     overlay.querySelector('.confirm-cancel').addEventListener('click', () => finish(false));
+    if (okOnly) overlay.querySelector('.confirm-cancel').remove();
     overlay.querySelector('.confirm-ok').addEventListener('click', () => finish(true));
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) finish(false);

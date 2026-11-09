@@ -3,7 +3,7 @@
 import * as rm from '../rooms.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-export const APP_VERSION = 35;
+export const APP_VERSION = 36;
 
 export const $ = (sel) => document.querySelector(sel);
 
@@ -120,6 +120,7 @@ export const els = {
   addWallBtn: $('#addWallBtn'),
   wallList: $('#wallList'),
   undoBtn: $('#undoBtn'),
+  closedNote: $('#closedNote'),
   undoActionBtn: $('#undoActionBtn'),
   redoActionBtn: $('#redoActionBtn'),
   exportPanel: $('#exportPanel'),

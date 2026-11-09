@@ -10,21 +10,22 @@ import * as rm from '../rooms.js';
 import * as laser from '../laser.js';
 import { $, activeRoom, allWalls, els, geometryOf, levelRooms, round3, state, ui } from './core.js';
 import { ROOM_DETAIL_FIELDS, closeRoomPanel, fillSharedSpan, handleCreateRoom, handleDeleteRoom, handleDiagCheck, handleDiagFix, handlePlacementTap, handleSeparateRoom, handleSpreadGap, renderRoomTabs, saveRoomDetails, setActiveRoom, startPlacing, stopPlacing, svgPoint } from './room-ui.js';
-import { addPhoto, closePhoto, deleteOpenPhoto, openPhoto, photoUrl } from './photo-ui.js';
+import { typePhotoNote, addPhoto, closePhoto, deleteOpenPhoto, openPhoto, photoUrl } from './photo-ui.js';
 import { applyMoveDim, endMove, handleDoorMatch, movingRoom, movingRoots, openDoorMatch, rotateMoving, shiftGroup, startMove, updateMoveDims } from './move.js';
 import { buildCeilingInput, buildLengthInputs, handleAddWall, handleClosePolygon, handleDeleteWall, handleEditWall, handleUndo, renderEntryTitle, renderMatchChips, resetEntryForm, setCustomSide, setSelectedHeading } from './entry.js';
 import { clampViewWidth, drawPlan, nearestHitLine, planFraction, render, renderStats, roomAtPoint, shownView, touchDist, touchMid, zoomAt, zoomFit } from './view.js';
-import { closeDetails, closeExport, currentJob, exportFailed, handleDeleteJob, handleLoadJob, handleNewJob, openDetails, renderJobsPanel, setSiteMode } from './jobs.js';
+import { typeDetails, closeDetails, closeExport, currentJob, exportFailed, handleDeleteJob, handleLoadJob, handleNewJob, openDetails, renderJobsPanel, setSiteMode } from './jobs.js';
 import { closeWallPanel, fillKeepClosed, handleBreakWall, handleDeleteFixture, handleDeleteOpening, handleSaveFixture, handleSaveOpening, handleUpdateLength, handleWallThickness, hideFixtureForm, hideOpeningForm, openWallPanel, panelWall, planEnds, roomSide, setFixtureTypeFields, setOpeningCorner, setOpeningHinge, setOpeningSwing, setOpeningType, showFixtureForm, showOpeningForm } from './walls.js';
-import { handleAddLevel, handleRenameLevel, switchLevel } from './levels.js';
+import { handleAddLevel, handleDeleteLevel, handleRenameLevel, switchLevel } from './levels.js';
 import { handleLaserBtn } from './laser-ui.js';
-import { persist, redo, saveJob, undo } from './history.js';
+import { flushPending, persist, redo, saveJob, saveSoon, undo } from './history.js';
 import { showAlert, showConfirm } from './dialogs.js';
 
-els.jobName.addEventListener('change', () => {
-  state.jobName = els.jobName.value || 'Untitled Job';
-  persist();
+els.jobName.addEventListener('input', () => {
+  const name = els.jobName.value.trim() || 'Untitled Job';
+  saveSoon('job-name', () => { state.jobName = name; });
 });
+els.jobName.addEventListener('change', () => flushPending());
 
 els.unitSelect.addEventListener('change', () => {
   state.unit = els.unitSelect.value;
@@ -75,6 +76,11 @@ els.wallForm.addEventListener('submit', (e) => {
 els.undoBtn.addEventListener('click', handleUndo);
 
 els.undoActionBtn.addEventListener('click', undo);
+$('#addAnywayBtn').addEventListener('click', () => {
+  ui.addAnyway = true;
+  renderEntryTitle();
+  $('#lenSingle, #lenFeet').focus();
+});
 
 els.redoActionBtn.addEventListener('click', redo);
 
@@ -182,7 +188,7 @@ els.ceilingInputs.addEventListener('input', () => {
   renderStats();
 });
 
-els.ceilingInputs.addEventListener('change', persist);
+els.ceilingInputs.addEventListener('change', () => persist());
 
 els.planSvg.addEventListener('touchstart', (e) => {
   if (e.touches.length === 2) {
@@ -417,13 +423,15 @@ els.roomTabs.addEventListener('click', (e) => {
 // Only light updates here: re-rendering the wall list while the name box
 // loses focus would swallow a tap on a wall row.
 els.roomName.addEventListener('input', () => {
-  activeRoom().name = els.roomName.value.trim();
+  const room = activeRoom();
+  room.name = els.roomName.value.trim();
   renderRoomTabs();
   renderEntryTitle();
   drawPlan();
+  saveSoon(`room-name:${room.id}`, () => {});
 });
 
-els.roomName.addEventListener('change', persist);
+els.roomName.addEventListener('change', () => { flushPending(); persist(`room-name:${state.activeRoomId}`); });
 
 els.deleteRoomBtn.addEventListener('click', handleDeleteRoom);
 
@@ -470,6 +478,7 @@ $('#levelSelect').addEventListener('change', (e) => switchLevel(e.target.value))
 $('#addLevelBtn').addEventListener('click', handleAddLevel);
 
 $('#renameLevelBtn').addEventListener('click', handleRenameLevel);
+$('#deleteLevelBtn').addEventListener('click', handleDeleteLevel);
 
 $('#addFixtureBtn').addEventListener('click', () => showFixtureForm(null));
 
@@ -487,7 +496,12 @@ $('#fixtureList').addEventListener('click', (e) => {
   else if (del) handleDeleteFixture(del.dataset.fxId);
 });
 
-Object.keys(ROOM_DETAIL_FIELDS).forEach((id) => $(`#${id}`).addEventListener('change', saveRoomDetails));
+Object.keys(ROOM_DETAIL_FIELDS).forEach((id) => {
+  $(`#${id}`).addEventListener('input', saveRoomDetails);
+  $(`#${id}`).addEventListener('change', flushPending); // leaving the box saves at once
+});
+['#detailJobName', '#detailAddress', '#detailClient', '#detailMeasuredBy'].forEach((sel) => $(sel).addEventListener('input', typeDetails));
+els.photoNote.addEventListener('input', typePhotoNote);
 
 els.spreadGapBtn.addEventListener('click', handleSpreadGap);
 

@@ -7,7 +7,7 @@ import { $, activeLabel, activeRoom, allWalls, els, geometryOf, levelOf, levelRo
 import { END_ARROWS, closeWallPanel, isShapeClosed, planEnds } from './walls.js';
 import { anchorDescription, buildCeilingInput, resetEntryForm } from './entry.js';
 import { canMove, endMove } from './move.js';
-import { persist } from './history.js';
+import { persist, saveSoon } from './history.js';
 import { render } from './view.js';
 import { renderPhotoStrip } from './photo-ui.js';
 import { showAlert, showConfirm } from './dialogs.js';
@@ -116,6 +116,7 @@ export function renderRoomDetails() {
   });
 }
 
+// Saved as you type (and straight away if the phone locks), as one undo step.
 export function saveRoomDetails() {
   const room = activeRoom();
   const d = {};
@@ -123,9 +124,10 @@ export function saveRoomDetails() {
     const v = $(`#${id}`).value.trim();
     if (v) d[key] = v;
   });
-  if (Object.keys(d).length) room.details = d;
-  else delete room.details;
-  persist();
+  saveSoon(`room-details:${room.id}`, () => {
+    if (Object.keys(d).length) room.details = d;
+    else delete room.details;
+  });
 }
 
 export async function handleSpreadGap() {

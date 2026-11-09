@@ -242,9 +242,24 @@ export function currentWallAngle() {
   return Math.abs(Math.abs(turn) - 180) < 0.01 ? null : turn;
 }
 
+// A closed room's entry form gives way to a note, so a tap on Add Wall
+// doesn't reopen the room by mistake.
+export function entryResting() {
+  const room = activeRoom();
+  return !ui.editingId && ui.insertAt == null && !ui.addAnyway && rm.roomClosed(room, geometryOf(room));
+}
+
 export function renderEntryTitle() {
   const nextIndex = entryIndex();
   const roomPrefix = state.rooms.length > 1 ? `${activeLabel()} – ` : '';
+  const resting = entryResting();
+  els.closedNote.classList.toggle('hidden', !resting);
+  els.wallForm.classList.toggle('hidden', resting);
+  if (resting) {
+    els.entryTitle.textContent = `${activeLabel()} – closed ✓`;
+    els.finishInsertBtn.classList.add('hidden');
+    return;
+  }
   if (ui.editingId) els.entryTitle.textContent = `${roomPrefix}Editing Wall ${nextIndex + 1}`;
   else if (ui.insertAt != null) els.entryTitle.textContent = `${roomPrefix}Inserting a wall after Wall ${nextIndex}`;
   else els.entryTitle.textContent = `${roomPrefix}Wall ${nextIndex + 1}`;
@@ -297,6 +312,7 @@ export function renderWallList() {
 }
 
 export function resetEntryForm() {
+  ui.addAnyway = false;
   ui.editingId = null;
   setSelectedHeading(null);
   setCustomSide('left');

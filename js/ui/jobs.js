@@ -6,9 +6,10 @@ import { $, activeRoom, allWalls, els, escapeHtml, levelOf, state, ui } from './
 import { buildCeilingInput, resetEntryForm } from './entry.js';
 import { closeWallPanel } from './walls.js';
 import { endMove } from './move.js';
-import { persist, resetHistory } from './history.js';
+import { flushPending, persist, resetHistory, saveSoon } from './history.js';
 import { render } from './view.js';
 import { showConfirm } from './dialogs.js';
+import { cleanUpPhotos } from './photo-ui.js';
 
 export async function handleNewJob() {
   if (ui.moving) endMove(true);
@@ -78,6 +79,7 @@ export async function handleDeleteJob(id) {
   store.deleteJob(id);
   if (state.jobId === id) await handleNewJob();
   renderJobsPanel();
+  cleanUpPhotos();
 }
 
 export function renderJobsPanel() {
@@ -120,18 +122,32 @@ export function openDetails() {
   els.detailsPanel.classList.remove('hidden');
 }
 
-export function closeDetails() {
+function readDetails() {
   const name = $('#detailJobName').value.trim();
   const address = $('#detailAddress').value.trim();
-  state.jobName = name || address || 'Untitled Job';
-  state.details = {
-    address,
-    client: $('#detailClient').value.trim(),
-    measuredBy: $('#detailMeasuredBy').value.trim(),
+  return {
+    jobName: name || address || 'Untitled Job',
+    details: { address, client: $('#detailClient').value.trim(), measuredBy: $('#detailMeasuredBy').value.trim() },
   };
-  try { localStorage.setItem(MEASURED_BY_KEY, state.details.measuredBy); } catch { /* not kept */ }
+}
+
+// Saved as you type, so nothing's lost if the phone locks mid-entry.
+export function typeDetails() {
+  const { jobName, details } = readDetails();
+  saveSoon('job-details', () => {
+    state.jobName = jobName;
+    state.details = details;
+  });
+}
+
+export function closeDetails() {
+  const { jobName, details } = readDetails();
+  state.jobName = jobName;
+  state.details = details;
+  try { localStorage.setItem(MEASURED_BY_KEY, details.measuredBy); } catch { /* not kept */ }
   els.detailsPanel.classList.add('hidden');
-  persist();
+  flushPending();
+  persist('job-details');
   render();
 }
 

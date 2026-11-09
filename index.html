@@ -44,6 +44,7 @@
       <select id="levelSelect" class="level-select" aria-label="Level"></select>
       <button id="addLevelBtn" type="button" class="text-btn">+ Level</button>
       <button id="renameLevelBtn" type="button" class="text-btn">Rename</button>
+      <button id="deleteLevelBtn" type="button" class="text-btn danger-text hidden">Delete</button>
     </div>
     <div id="roomTabs" class="room-tabs"></div>
 
@@ -109,6 +110,10 @@
     <section id="entryCard" class="entry-card">
       <h2 id="entryTitle">Wall 1</h2>
 
+      <div id="closedNote" class="closed-note hidden">
+        <p>This room is closed ✓. To change a wall, tap it on the plan or in the list below.</p>
+        <button type="button" id="addAnywayBtn" class="text-btn">Add another wall anyway</button>
+      </div>
       <form id="wallForm">
       <div id="anchorFormNote" class="anchor-note hidden"></div>
 

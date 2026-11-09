@@ -807,3 +807,7 @@ textarea.panel-input { resize: vertical; font-family: inherit; }
 .laser-btn.connected { color: var(--green); }
 .laser-filled { outline: 2px solid var(--green); }
 .level-title { margin: 6mm 0 2mm; }
+.closed-note p { margin: 0.2rem 0 0.4rem; color: var(--text-dim); }
+.save-state.save-failed { color: var(--red); font-weight: 600; }
+/* anything marked hidden stays hidden, whatever its own display rule */
+.hidden { display: none !important; }

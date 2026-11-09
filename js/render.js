@@ -424,13 +424,32 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
       // side, in which case it moves to the middle of the longest clear stretch.
       const labelSide = print ? insideSign : -insideSign;
       const swingOnLabelSide = print ? 'in' : 'out';
-      const blocked = (w.openings || [])
-        .filter((o) => o.type === 'door' && (o.swing || 'in') === swingOnLabelSide)
-        .map((o) => openingSpan(w, o))
+      // In print the lengths sit inside the room, beside the opening and
+      // fixture tags, so keep clear of all of them; on screen they're outside,
+      // where only a door swinging out gets in the way.
+      const tagRoom = fontSize * 1.6; // room to leave either side of a tag
+      const blocked = (print
+        ? [
+          ...(w.openings || []).map((o) => {
+            const sp = openingSpan(w, o);
+            const mid = (sp.startM + sp.endM) / 2;
+            return o.type === 'door' && (o.swing || 'in') !== 'in'
+              ? null
+              : { startM: Math.min(sp.startM, mid - tagRoom), endM: Math.max(sp.endM, mid + tagRoom) };
+          }).filter(Boolean),
+          ...(w.fixtures || []).map((f) => {
+            const [f0, f1] = fixtureSpan(w, f);
+            return { startM: f0 - tagRoom * 0.7, endM: f1 + tagRoom * 0.7 };
+          }),
+        ]
+        : (w.openings || [])
+          .filter((o) => o.type === 'door' && (o.swing || 'in') === swingOnLabelSide)
+          .map((o) => openingSpan(w, o)))
         .sort((p, q) => p.startM - q.startM);
       const labelText = formatLength(w.lengthM, unit); // no wall number: it read as part of the length
       const halfLabel = labelText.length * fontSize * 0.28; // approx. half the text width
       let labelAt = w.lengthM / 2;
+      let extraRow = 0;
       if (blocked.some((sp) => sp.startM < labelAt + halfLabel && sp.endM > labelAt - halfLabel)) {
         let best = { from: 0, to: 0 };
         let cursor = 0;
@@ -439,10 +458,15 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
           cursor = Math.max(cursor, sp.endM);
         });
         labelAt = (best.from + best.to) / 2;
+        // no gap wide enough: keep it central, a line further into the room
+        if (best.to - best.from < halfLabel * 2) {
+          labelAt = w.lengthM / 2;
+          extraRow = print ? fontSize * 1.4 : 0;
+        }
       }
       const labelBase = along(labelAt);
       // outside: clear of the wall band too
-      const offset = (fontSize * 0.9 + (print ? 0 : WT)) * labelSide;
+      const offset = (fontSize * 0.9 + (print ? 0 : WT) + extraRow) * labelSide;
       const lx = labelBase.x + nx * offset;
       const ly = labelBase.y + ny * offset;
       const label = el('text', {
