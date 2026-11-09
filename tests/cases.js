@@ -361,6 +361,54 @@ const tests = [
     },
   },
   {
+    name: 'placing a room on a wall, adding a door, lining up doorways and zooming',
+    async run({ page, assert }) {
+      await loadJob(page, { rooms: [
+        { id: 'r1', number: 1, walls: rect('r1', 4, 3, { c: [door('d1', 1)] }), anchor: null },
+        { id: 'r2', number: 2, walls: rect('r2', 3, 3, { a: [door('d2', 1)] }), anchor: { type: 'fixed', x: 9, y: 2, heading: null } },
+      ] });
+      // a new room off Room 1's right-hand wall
+      await page.click('#roomTabs .room-tab.add');
+      await page.$eval('#planSvg', (e) => e.scrollIntoView({ block: 'center' }));
+      const box = await page.$eval('.plan-hit[data-wall-id="r1c"]', (l) => { const r = l.getBoundingClientRect(); return { x: r.x + r.width / 2 + 12, y: r.y + r.height / 2 }; });
+      await page.mouse.click(box.x, box.y);
+      await page.waitForSelector('#roomPanel:not(.hidden)');
+      await page.click('#createRoomBtn');
+      let job = await saved(page);
+      const r3 = job.rooms[job.rooms.length - 1];
+      assert.equal(r3.anchor.shared, true);
+      assert.equal(r3.anchor.wallId, 'r1c');
+      // a door on its first wall, through the form
+      await addWall(page, 90, 2000);
+      await tapWall(page, job.rooms[2] ? (await saved(page)).rooms[2].walls[0].id : '');
+      await page.click('#addOpeningBtn');
+      await page.click('#openingTypeButtons [data-type="door"]');
+      await page.fill('#opOffSingle', '300');
+      await page.fill('#opWSingle', '820');
+      await page.fill('#opHSingle', '2040');
+      await page.click('#saveOpeningBtn');
+      await page.click('#closeWallPanelBtn');
+      job = await saved(page);
+      assert.equal(job.rooms[2].walls[0].openings.length, 1);
+      // Room 2 lined up with Room 1 by its doorway
+      await page.click('#roomTabs .room-tab >> nth=1');
+      await page.click('#moveRoomBtn');
+      await page.click('#matchDoorBtn');
+      await page.selectOption('#doorHereSelect', 'd2');
+      await page.selectOption('#doorThereSelect', 'd1');
+      await page.click('#applyDoorMatchBtn');
+      await page.click('#doneMoveBtn');
+      job = await saved(page);
+      const a = job.rooms.find((r) => r.id === 'r2').anchor;
+      assert.ok(Math.abs(a.x - 4.11) < 0.002, `Room 2 now starts at x ${a.x}`);
+      // zoom in and back out
+      await page.click('#zoomInBtn');
+      assert.equal(await page.isVisible('#zoomFitBtn'), true);
+      await page.click('#zoomFitBtn');
+      assert.equal(await page.isVisible('#zoomFitBtn'), false);
+    },
+  },
+  {
     name: 'random jobs draw and switch rooms without errors',
     async run({ page, assert }) {
       let seed = 11;

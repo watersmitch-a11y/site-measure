@@ -31,3 +31,25 @@ Everything (job name, unit preference, every wall's length and angle) is stored 
 ## Moving to a native Android app later
 
 The app logic is deliberately framework-free and split into plain modules (`js/geometry.js`, `js/units.js`, `js/storage.js`, `js/render.js`) so the measurement math and state logic can be ported into React Native, Flutter, or wrapped as-is in Capacitor/Trusted Web Activity for a Play Store build, without a rewrite. Capacitor is the lowest-effort path since this is already a well-behaved PWA.
+
+## Code layout
+
+Plain ES modules, no build step.
+
+- `js/app.js` – starts the app.
+- `js/ui/` – the screen, one module per feature: `core` (shared state and page elements), `entry` (wall entry card), `view` (drawing and zoom), `walls` (wall window: length, thickness, breaking, openings, fixtures), `room-ui` (tabs, room card, placing rooms), `move` (moving joined rooms), `levels`, `jobs` (jobs, details, export menu), `history` (save, undo/redo), `photo-ui`, `laser-ui`, `dialogs`, `events` (all the button and touch wiring).
+- `js/rooms.js`, `js/geometry.js` – room geometry: shared walls, merging, snapping, gaps, squaring.
+- `js/render.js` – draws the plan (SVG); `js/export.js` (PDF), `js/dxf.js` (CAD), `js/jobfile.js` (job files).
+- `js/photos.js` (photo store, IndexedDB), `js/fixtures.js`, `js/openings.js`, `js/laser.js` (Bluetooth DISTO/GLM), `js/units.js`, `js/length-input.js`, `js/storage.js`.
+
+When releasing, bump `APP_VERSION` in `js/ui/core.js` and `CACHE_NAME` in `service-worker.js` together, and list any new file in the service worker.
+
+## Tests
+
+```
+npm install
+npx playwright install chromium   # first time only
+npm test                          # or: node tests/run.js <part of a test name>
+```
+
+The tests (`tests/cases.js`) drive the app in headless Chromium. They also run on GitHub on every push (`.github/workflows/test.yml`).

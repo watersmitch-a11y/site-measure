@@ -1,4 +1,4 @@
-const CACHE_NAME = 'site-measure-v34';
+const CACHE_NAME = 'site-measure-v35';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -17,6 +17,19 @@ const CORE_ASSETS = [
   './js/photos.js',
   './js/fixtures.js',
   './js/laser.js',
+  './js/ui/core.js',
+  './js/ui/dialogs.js',
+  './js/ui/history.js',
+  './js/ui/jobs.js',
+  './js/ui/levels.js',
+  './js/ui/entry.js',
+  './js/ui/view.js',
+  './js/ui/walls.js',
+  './js/ui/room-ui.js',
+  './js/ui/photo-ui.js',
+  './js/ui/laser-ui.js',
+  './js/ui/move.js',
+  './js/ui/events.js',
   './manifest.json',
 ];
 
