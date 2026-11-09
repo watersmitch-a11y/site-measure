@@ -54,8 +54,8 @@ function fieldValue(raw) {
 }
 
 const SINGLE_UNIT_CONFIG = {
-  mm: { placeholder: 'Millimeters', suffix: 'mm', step: '1' },
-  m: { placeholder: 'Meters', suffix: 'm', step: '0.01' },
+  mm: { placeholder: 'Millimetres', suffix: 'mm', step: '1' },
+  m: { placeholder: 'Metres', suffix: 'm', step: '0.01' },
   ft: { placeholder: 'Feet', suffix: 'ft', step: '0.01' },
 };
 

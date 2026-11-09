@@ -91,8 +91,8 @@ export function formatArea(squareMeters, unit, precision = 1) {
 }
 
 export const UNIT_LABELS = {
-  mm: 'Millimeters',
+  mm: 'Millimetres',
   'ft-in': 'Feet & Inches',
   ft: 'Decimal Feet',
-  m: 'Meters',
+  m: 'Metres',
 };

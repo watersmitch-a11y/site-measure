@@ -21,7 +21,8 @@ function directionName(heading) {
 }
 
 // planEnds(idx, room) -> { start: 'left', end: 'right' } as used in the app's panels
-export function exportPlan(job, { planEnds }) {
+// wallName(idx, room) -> 'top' etc.; photoUrl(id) -> Promise of an image URL
+export async function exportPlan(job, { planEnds, wallName = (i) => `wall ${i + 1}`, photoUrl = null }) {
   const { unit, rooms } = job;
   const fmt = (m) => units.formatLength(m, unit);
   const area = (m2) => units.formatArea(m2, unit);
@@ -55,6 +56,7 @@ export function exportPlan(job, { planEnds }) {
     const wallRows = room.walls.map((w, i) => {
       const notes = [];
       if (w.ceilingHeightM) notes.push(`Ceiling ${fmt(w.ceilingHeightM)}`);
+      if (w.thicknessM) notes.push(`${fmt(w.thicknessM)} wall`);
       return `<tr><td>${i + 1}</td><td>${fmt(w.lengthM)}</td><td>${directionName(headings[i])}</td><td>${esc(notes.join(' · '))}</td></tr>`;
     }).join('');
 
@@ -75,6 +77,13 @@ export function exportPlan(job, { planEnds }) {
         `<td>${op.MEASURED_TO[o.measuredTo] || ''}</td><td>${esc(details.join(' · '))}</td></tr>`;
     })).join('');
 
+    const photoFigures = (room.photos || []).map((p) => {
+      const idx = p.wallId ? room.walls.findIndex((w) => w.id === p.wallId) : -1;
+      const where = idx >= 0 ? `${wallName(idx, room)} wall` : 'Room';
+      const caption = [where.charAt(0).toUpperCase() + where.slice(1), p.note].filter(Boolean).join(' – ');
+      return `<figure><img data-photo="${esc(p.id)}" alt="" /><figcaption>${esc(caption)}</figcaption></figure>`;
+    }).join('');
+
     return `<section>
       <h2>${esc(rm.roomLabel(room, ri))}</h2>
       <p class="room-summary">${summary}</p>
@@ -83,6 +92,7 @@ export function exportPlan(job, { planEnds }) {
       <table><thead><tr><th>#</th><th>Length</th><th>Direction</th><th>Notes</th></tr></thead><tbody>${wallRows}</tbody></table>
       ${openingRows ? `<h3>Openings</h3>
       <table><thead><tr><th>Tag</th><th>Type</th><th>W × H</th><th>Position</th><th>Measured to</th><th>Details</th></tr></thead><tbody>${openingRows}</tbody></table>` : ''}
+      ${photoFigures ? `<h3>Photos</h3><div class="print-photos">${photoFigures}</div>` : ''}
     </section>`;
   }).join('');
 
@@ -95,6 +105,15 @@ export function exportPlan(job, { planEnds }) {
     ${measured.length > 1 ? `<p class="job-total">Total floor area ${area(totalArea)} (${measured.length} rooms)</p>` : ''}
     ${roomSections}`;
   renderPlan(view.querySelector('svg'), rooms, unit, { print: true });
+
+  // photos have to be loaded before the print screen takes its copy
+  const imgs = [...view.querySelectorAll('img[data-photo]')];
+  await Promise.all(imgs.map(async (img) => {
+    const url = photoUrl ? await photoUrl(img.dataset.photo) : '';
+    if (!url) { img.closest('figure').remove(); return; }
+    img.src = url;
+    await img.decode().catch(() => {});
+  }));
 
   // the browser's own name for the PDF comes from the page title
   const title = document.title;

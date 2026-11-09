@@ -6,9 +6,12 @@ import { buildLengthInput, readLength, setLength } from './length-input.js';
 import * as op from './openings.js';
 import * as rm from './rooms.js';
 import { exportPlan } from './export.js';
+import { exportDxf } from './dxf.js';
+import * as jobfile from './jobfile.js';
+import * as photos from './photos.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-const APP_VERSION = 30;
+const APP_VERSION = 31;
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -20,6 +23,7 @@ const state = {
   rooms: [rm.newRoom()],
   activeRoomId: null,
 };
+state.rooms[0].number = 1;
 state.activeRoomId = state.rooms[0].id;
 
 // The wall-entry, openings and ceiling code all work on the active room;
@@ -100,6 +104,17 @@ const els = {
   addWallBtn: $('#addWallBtn'),
   wallList: $('#wallList'),
   undoBtn: $('#undoBtn'),
+  undoActionBtn: $('#undoActionBtn'),
+  redoActionBtn: $('#redoActionBtn'),
+  exportPanel: $('#exportPanel'),
+  exportError: $('#exportError'),
+  importJobInput: $('#importJobInput'),
+  roomPhotos: $('#roomPhotos'),
+  wallPhotos: $('#wallPhotos'),
+  photoViewer: $('#photoViewer'),
+  photoViewerTitle: $('#photoViewerTitle'),
+  photoViewerImg: $('#photoViewerImg'),
+  photoNote: $('#photoNote'),
   closePolygonBtn: $('#closePolygonBtn'),
   jobsPanel: $('#jobsPanel'),
   jobsList: $('#jobsList'),
@@ -139,6 +154,9 @@ const els = {
   moveRoomBtn: $('#moveRoomBtn'),
   separateRoomBtn: $('#separateRoomBtn'),
   breakEndSelect: $('#breakEndSelect'),
+  wallThickInputs: $('#wallThickInputs'),
+  wallThickAll: $('#wallThickAll'),
+  wallThickError: $('#wallThickError'),
   breakAtInputs: $('#breakAtInputs'),
   breakError: $('#breakError'),
   breakWallBtn: $('#breakWallBtn'),
@@ -456,7 +474,8 @@ function render() {
   updateMoveDims();
   renderStats();
   renderWallList();
-  els.closePolygonBtn.classList.toggle('hidden', ui.insertAt != null || state.walls.length < rm.minWallsToClose(activeRoom()));
+  els.closePolygonBtn.classList.toggle('hidden', ui.insertAt != null ||
+    state.walls.length < rm.minWallsToClose(activeRoom()) || rm.roomClosed(activeRoom(), geometryOf(activeRoom())));
 }
 
 // ---------- plan view and zoom ----------
@@ -608,7 +627,7 @@ function resetEntryForm() {
   clearLengthInputs();
 }
 
-function persist() {
+function saveJob() {
   if (!state.jobId) state.jobId = store.newJobId();
   store.saveJob({
     id: state.jobId,
@@ -618,6 +637,72 @@ function persist() {
     activeRoomId: state.activeRoomId,
   });
 }
+
+// ---------- undo / redo ----------
+// Every saved change is a step that can be undone: the job as it was after
+// each save is kept (the last 50), and undo goes back one.
+const history = { undo: [], redo: [], last: null };
+const HISTORY_MAX = 50;
+
+const jobSnapshot = () => JSON.stringify({ rooms: state.rooms, jobName: state.jobName, unit: state.unit });
+
+function resetHistory() {
+  history.undo = [];
+  history.redo = [];
+  history.last = { key: jobSnapshot(), activeRoomId: state.activeRoomId };
+  renderUndoButtons();
+}
+
+function recordHistory() {
+  const key = jobSnapshot();
+  if (history.last && key === history.last.key) {
+    history.last.activeRoomId = state.activeRoomId;
+    return;
+  }
+  if (history.last) {
+    history.undo.push(history.last);
+    if (history.undo.length > HISTORY_MAX) history.undo.shift();
+  }
+  history.redo = [];
+  history.last = { key, activeRoomId: state.activeRoomId };
+  renderUndoButtons();
+}
+
+function persist() {
+  saveJob();
+  recordHistory();
+}
+
+function renderUndoButtons() {
+  els.undoActionBtn.disabled = history.undo.length === 0;
+  els.redoActionBtn.disabled = history.redo.length === 0;
+}
+
+function stepHistory(from, to) {
+  if (ui.moving) endMove(false);
+  if (!from.length) return;
+  const target = from.pop();
+  to.push(history.last);
+  history.last = target;
+  const data = JSON.parse(target.key);
+  state.rooms = data.rooms;
+  state.jobName = data.jobName;
+  state.unit = data.unit;
+  state.activeRoomId = state.rooms.some((r) => r.id === target.activeRoomId) ? target.activeRoomId : state.rooms[0].id;
+  stopPlacing();
+  closeWallPanel();
+  ui.insertAt = null;
+  ui.insertRest = null;
+  resetEntryForm();
+  buildLengthInputs();
+  buildCeilingInput();
+  saveJob();
+  renderUndoButtons();
+  render();
+}
+
+const undo = () => stepHistory(history.undo, history.redo);
+const redo = () => stepHistory(history.redo, history.undo);
 
 function handleAddWall() {
   const lengthM = readLengthMeters();
@@ -689,7 +774,12 @@ function flashInvalid() {
   setTimeout(() => els.addWallBtn.classList.remove('invalid-shake'), 300);
 }
 
-function showConfirm(message) {
+// A message with just an OK button.
+function showAlert(message) {
+  return showConfirm(message, { okOnly: true });
+}
+
+function showConfirm(message, { okOnly = false } = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'jobs-panel confirm-overlay';
@@ -702,6 +792,10 @@ function showConfirm(message) {
         </div>
       </div>`;
     overlay.querySelector('.confirm-message').textContent = message;
+    if (okOnly) {
+      overlay.querySelector('.confirm-cancel').remove();
+      overlay.querySelector('.confirm-ok').textContent = 'OK';
+    }
     document.body.appendChild(overlay);
     const finish = (result) => {
       overlay.remove();
@@ -787,10 +881,12 @@ async function handleNewJob() {
   state.jobId = null;
   state.jobName = 'Untitled Job';
   state.rooms = [rm.newRoom()];
+  state.rooms[0].number = 1;
   state.activeRoomId = state.rooms[0].id;
   closeWallPanel();
   resetEntryForm();
   buildCeilingInput();
+  resetHistory();
   render();
 }
 
@@ -809,6 +905,8 @@ function applyJob(job) {
     state.rooms = [room];
   }
   rm.migrateSharedWallRooms(state.rooms);
+  rm.numberRooms(state.rooms);
+  resetHistory();
   state.activeRoomId = state.rooms.some((r) => r.id === job.activeRoomId)
     ? job.activeRoomId
     : state.rooms[0].id;
@@ -950,6 +1048,11 @@ function openWallPanel(id) {
   setLength(state.unit, 'panelLen', wall.lengthM);
   els.panelLengthError.classList.add('hidden');
   fillKeepClosed();
+  renderPhotoStrip(els.wallPhotos, activeRoom(), id);
+  buildLengthInput(els.wallThickInputs, state.unit, 'wallThick');
+  setLength(state.unit, 'wallThick', rm.wallThickness(wall));
+  els.wallThickAll.checked = false;
+  els.wallThickError.classList.add('hidden');
   buildLengthInput(els.breakAtInputs, state.unit, 'breakAt', 'Distance along the wall');
   els.breakError.classList.add('hidden');
   const breakEnds = planEnds(idx);
@@ -1259,11 +1362,12 @@ function renderRoomTabs() {
 function renderRoomCard() {
   const room = activeRoom();
   if (document.activeElement !== els.roomName) els.roomName.value = room.name || '';
-  els.roomName.placeholder = `Room ${roomIndex(room) + 1}`;
+  els.roomName.placeholder = rm.roomLabel({ ...room, name: '' }, roomIndex(room));
   els.deleteRoomBtn.classList.toggle('hidden', state.rooms.length < 2);
   els.moveRoomBtn.classList.toggle('hidden', !canMove(room) || !!ui.moving);
   const joined = room.walls.length ? rm.joinedRooms(state.rooms, rm.roomGeometry(state.rooms), room, true) : [];
   els.separateRoomBtn.classList.toggle('hidden', !joined.length || !!ui.moving);
+  renderPhotoStrip(els.roomPhotos, room);
   const anchorText = anchorDescription(room);
   els.roomAnchorNote.textContent = anchorText;
   els.roomAnchorNote.classList.toggle('hidden', !anchorText);
@@ -1277,6 +1381,33 @@ function setActiveRoom(id) {
   closeWallPanel();
   resetEntryForm();
   buildCeilingInput();
+  persist();
+  render();
+}
+
+// A wall's thickness (or every wall of the room's): drawn outside the
+// measured line, so rooms either side line up with the right gap. Rooms
+// sharing the wall keep the same gap.
+function handleWallThickness(valueM) {
+  const room = activeRoom();
+  const wall = panelWall();
+  if (!wall) return;
+  const t = valueM ?? readLength(state.unit, 'wallThick');
+  if (t == null || t < 0.02 || t > 1) {
+    els.wallThickError.textContent = 'Enter a wall thickness between 20 mm and 1000 mm.';
+    els.wallThickError.classList.remove('hidden');
+    return;
+  }
+  els.wallThickError.classList.add('hidden');
+  const targets = els.wallThickAll.checked ? room.walls : [wall];
+  targets.forEach((w) => {
+    if (Math.abs(t - rm.DEFAULT_WALL_THICKNESS_M) < 0.0005) delete w.thicknessM;
+    else w.thicknessM = Math.round(t * 1000) / 1000;
+    state.rooms.forEach((r) => {
+      if (r.anchor && r.anchor.shared && r.anchor.wallId === w.id) r.anchor.thicknessM = rm.wallThickness(w);
+    });
+  });
+  setLength(state.unit, 'wallThick', t);
   persist();
   render();
 }
@@ -1307,6 +1438,7 @@ function handleBreakWall() {
   if (across) return showError(`${rm.roomLabel(across, roomIndex(across))} shares this wall across the break; separate it first.`);
 
   const rest = { id: uid(), lengthM: wall.lengthM - at, angle: 0, openings: [] };
+  if (wall.thicknessM) rest.thicknessM = wall.thicknessM;
   if (wall.ceilingHeightM) rest.ceilingHeightM = wall.ceilingHeightM;
   const keep = [];
   (wall.openings || []).forEach((o) => {
@@ -1345,7 +1477,7 @@ async function handleSeparateRoom() {
   const joined = rm.joinedRooms(state.rooms, geom, room, true);
   if (!joined.length) return;
   if (room.anchor && room.anchor.shared && !rm.roomClosed(room, geom.get(room.id))) {
-    await showConfirm(`Finish ${activeLabel()}'s walls back to the shared wall first, then separate it.`);
+    await showAlert(`Finish ${activeLabel()}'s walls back to the shared wall first, then separate it.`);
     return;
   }
   const names = joined.map((r) => rm.roomLabel(r, roomIndex(r))).join(', ');
@@ -1355,6 +1487,106 @@ async function handleSeparateRoom() {
   rm.separateRoom(state.rooms, room);
   persist();
   render();
+}
+
+// ---------- photos ----------
+// Photos are taken (or picked) per room or per wall, shrunk, and kept in the
+// photo store; the room lists them as { id, wallId, note, takenAt }.
+
+const photoUrls = new Map(); // photo id -> object URL for its thumbnail
+ui.photo = null; // { roomId, id } while the viewer is open
+
+async function photoUrl(id) {
+  if (photoUrls.has(id)) return photoUrls.get(id);
+  const blob = await photos.getPhoto(id).catch(() => null);
+  const url = blob ? URL.createObjectURL(blob) : '';
+  photoUrls.set(id, url);
+  return url;
+}
+
+function renderPhotoStrip(container, room, wallId) {
+  const list = (room.photos || []).filter((p) => (wallId === undefined ? true : p.wallId === wallId));
+  container.innerHTML = '';
+  if (!list.length) {
+    container.innerHTML = '<span class="photo-empty">None yet</span>';
+    return;
+  }
+  list.forEach((p) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'photo-thumb';
+    btn.dataset.id = p.id;
+    btn.title = p.note || 'Photo';
+    if (p.wallId && wallId === undefined) {
+      const idx = room.walls.findIndex((w) => w.id === p.wallId);
+      if (idx >= 0) btn.dataset.wall = roomSide(idx, room);
+    }
+    const img = document.createElement('img');
+    img.alt = p.note || 'Site photo';
+    photoUrl(p.id).then((url) => { img.src = url; });
+    btn.appendChild(img);
+    container.appendChild(btn);
+  });
+}
+
+async function addPhoto(file, wallId) {
+  if (!file) return;
+  const room = activeRoom();
+  try {
+    const blob = await photos.shrinkImage(file);
+    const id = `p_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    await photos.putPhoto(id, blob);
+    room.photos = [...(room.photos || []), { id, wallId: wallId || null, note: '', takenAt: new Date().toISOString() }];
+    persist();
+    renderRoomCard();
+    if (wallId) renderPhotoStrip(els.wallPhotos, room, wallId);
+    openPhoto(room.id, id); // straight to the note
+  } catch (err) {
+    await showAlert(`Couldn't add that photo: ${err.message}`);
+  }
+}
+
+async function openPhoto(roomId, id) {
+  const room = state.rooms.find((r) => r.id === roomId);
+  const p = room && (room.photos || []).find((x) => x.id === id);
+  if (!p) return;
+  ui.photo = { roomId, id };
+  const idx = p.wallId ? room.walls.findIndex((w) => w.id === p.wallId) : -1;
+  const where = idx >= 0 ? `${roomSide(idx, room)} wall` : 'room';
+  els.photoViewerTitle.textContent = `${rm.roomLabel(room, roomIndex(room))} – ${where}`;
+  els.photoNote.value = p.note || '';
+  els.photoViewerImg.src = await photoUrl(id);
+  els.photoViewer.classList.remove('hidden');
+}
+
+function closePhoto() {
+  const open = ui.photo;
+  ui.photo = null;
+  els.photoViewer.classList.add('hidden');
+  if (!open) return;
+  const room = state.rooms.find((r) => r.id === open.roomId);
+  const p = room && (room.photos || []).find((x) => x.id === open.id);
+  if (p && p.note !== els.photoNote.value.trim()) {
+    p.note = els.photoNote.value.trim();
+    persist();
+  }
+  renderRoomCard();
+  if (ui.panelWallId) renderPhotoStrip(els.wallPhotos, activeRoom(), ui.panelWallId);
+}
+
+async function deleteOpenPhoto() {
+  const open = ui.photo;
+  if (!open) return;
+  const ok = await showConfirm('Delete this photo?');
+  if (!ok) return;
+  const room = state.rooms.find((r) => r.id === open.roomId);
+  // the picture stays in the store so Undo can bring it back
+  room.photos = (room.photos || []).filter((x) => x.id !== open.id);
+  ui.photo = null;
+  els.photoViewer.classList.add('hidden');
+  persist();
+  renderRoomCard();
+  if (ui.panelWallId) renderPhotoStrip(els.wallPhotos, room, ui.panelWallId);
 }
 
 // ---------- moving a room ----------
@@ -1732,7 +1964,8 @@ function openPlacementSheet() {
   const ends = planEnds(host.wallIdx, host.room);
   els.sharedStartLabel.textContent = `${END_ARROWS[ends.start]} Shared part starts this far from the ${ends.start} end`;
   buildLengthInput($('#thicknessInputs'), state.unit, 'thick');
-  setLength(state.unit, 'thick', rm.DEFAULT_WALL_THICKNESS_M);
+  const placeHost = placementHost();
+  setLength(state.unit, 'thick', rm.wallThickness(placeHost && placeHost.wall)); // the shared wall's own thickness
   buildLengthInput($('#anchorOffsetInputs'), state.unit, 'anchorOff');
   buildLengthInput($('#sharedLengthInputs'), state.unit, 'sharedLen');
   ui.placementEdited = false;
@@ -1807,6 +2040,7 @@ function handleCreateRoom() {
 function createRoom(anchor, walls = []) {
   stopPlacing();
   const room = rm.newRoom(anchor);
+  room.number = rm.nextRoomNumber(state.rooms);
   room.walls = walls;
   // ceiling heights rarely change through a job: start from the last one set
   const lastCeiling = [...state.rooms].reverse().find((r) => r.ceilingHeightM);
@@ -1877,13 +2111,69 @@ els.wallForm.addEventListener('submit', (e) => {
   handleAddWall();
 });
 els.undoBtn.addEventListener('click', handleUndo);
+els.undoActionBtn.addEventListener('click', undo);
+els.redoActionBtn.addEventListener('click', redo);
 els.closePolygonBtn.addEventListener('click', handleClosePolygon);
 els.newJobBtn.addEventListener('click', handleNewJob);
 els.saveJobBtn.addEventListener('click', handleSaveJob);
 els.exportBtn.addEventListener('click', () => {
-  if (allWalls().length === 0) return;
-  persist();
-  exportPlan({ name: state.jobName, unit: state.unit, rooms: state.rooms }, { planEnds });
+  els.exportError.classList.add('hidden');
+  els.exportPanel.classList.remove('hidden');
+});
+const closeExport = () => els.exportPanel.classList.add('hidden');
+const currentJob = () => ({ id: state.jobId, name: state.jobName, unit: state.unit, rooms: state.rooms, activeRoomId: state.activeRoomId });
+function exportFailed(message) {
+  els.exportError.textContent = message;
+  els.exportError.classList.remove('hidden');
+}
+$('#closeExportBtn').addEventListener('click', closeExport);
+els.exportPanel.addEventListener('click', (e) => { if (e.target === els.exportPanel) closeExport(); });
+$('#exportPdfBtn').addEventListener('click', async () => {
+  if (allWalls().length === 0) return exportFailed('Measure some walls first.');
+  saveJob();
+  closeExport();
+  await exportPlan(currentJob(), { planEnds, wallName: roomSide, photoUrl });
+});
+$('#exportDxfBtn').addEventListener('click', async () => {
+  if (allWalls().length === 0) return exportFailed('Measure some walls first.');
+  saveJob();
+  const blob = exportDxf(currentJob());
+  const result = await jobfile.shareOrDownload(blob, `${(state.jobName || 'Site measure').replace(/[\\/:*?"<>|]+/g, '-')}.dxf`, state.jobName);
+  if (result !== 'cancelled') closeExport();
+});
+$('#exportJobBtn').addEventListener('click', async () => {
+  saveJob();
+  try {
+    const blob = await jobfile.jobFileBlob(currentJob());
+    const result = await jobfile.shareOrDownload(blob, jobfile.jobFileName(currentJob()), state.jobName);
+    if (result !== 'cancelled') closeExport();
+  } catch (err) {
+    exportFailed(`Couldn't save the job file: ${err.message}`);
+  }
+});
+$('#importJobBtn').addEventListener('click', () => els.importJobInput.click());
+els.importJobInput.addEventListener('change', async () => {
+  const file = els.importJobInput.files[0];
+  els.importJobInput.value = '';
+  if (!file) return;
+  let job;
+  try {
+    job = await jobfile.readJobFile(file);
+  } catch (err) {
+    await showAlert(err.message);
+    return;
+  }
+  if (job.id && store.loadJob(job.id)) {
+    const replace = await showConfirm(`"${job.name}" is already on this phone. Replace it with the file's copy? ` +
+      '(Cancel keeps both, opening the file as a copy.)');
+    if (!replace) {
+      job.id = store.newJobId();
+      job.name = `${job.name} (copy)`;
+    }
+  }
+  if (!job.id) job.id = store.newJobId();
+  store.saveJob(job);
+  handleLoadJob(job.id);
 });
 
 els.wallList.addEventListener('click', (e) => {
@@ -2201,6 +2491,29 @@ els.createRoomBtn.addEventListener('click', handleCreateRoom);
 els.moveRoomBtn.addEventListener('click', startMove);
 els.separateRoomBtn.addEventListener('click', handleSeparateRoom);
 els.breakWallBtn.addEventListener('click', handleBreakWall);
+$('#roomPhotoInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  addPhoto(file, null);
+});
+$('#wallPhotoInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  addPhoto(file, ui.panelWallId);
+});
+[els.roomPhotos, els.wallPhotos].forEach((strip) => strip.addEventListener('click', (e) => {
+  const thumb = e.target.closest('.photo-thumb');
+  if (thumb) openPhoto(state.activeRoomId, thumb.dataset.id);
+}));
+$('#closePhotoBtn').addEventListener('click', closePhoto);
+$('#donePhotoBtn').addEventListener('click', closePhoto);
+$('#deletePhotoBtn').addEventListener('click', deleteOpenPhoto);
+els.photoViewer.addEventListener('click', (e) => { if (e.target === els.photoViewer) closePhoto(); });
+$('#wallThickBtn').addEventListener('click', () => handleWallThickness());
+$('#wallThickChips').addEventListener('click', (e) => {
+  const chip = e.target.closest('.chip');
+  if (chip) handleWallThickness(Number(chip.dataset.mm) / 1000);
+});
 els.finishInsertBtn.addEventListener('click', () => {
   // The wall was measured end to end, so a step along it comes off the rest
   // of the wall: shorten (or lengthen) that piece to close the room again.
@@ -2270,6 +2583,7 @@ function init() {
   }
 
   buildCeilingInput();
+  if (!history.last) resetHistory();
   render();
 
   els.appVersion.textContent = `Site Measure v${APP_VERSION}`;

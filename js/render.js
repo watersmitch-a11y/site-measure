@@ -2,7 +2,7 @@ import { boundingBox } from './geometry.js';
 import { formatLength, formatArea } from './units.js';
 import { openingSpan, openingTags } from './openings.js';
 import {
-  roomGeometry, closingGap, polygonArea, insideSign as roomInsideSign, roomLabel, wallMerges, DEFAULT_WALL_THICKNESS_M,
+  roomGeometry, closingGap, polygonArea, insideSign as roomInsideSign, roomLabel, wallMerges, DEFAULT_WALL_THICKNESS_M, wallThickness,
 } from './rooms.js';
 
 // Walls are drawn to scale as bands this thick, outside the measured
@@ -175,12 +175,13 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
     return { x: (q.x - p.x) / l, y: (q.y - p.y) / l };
   };
   const outOf = (u) => ({ x: u.y * insideSign, y: -u.x * insideSign }); // outward normal
+  const T = (k) => wallThickness(walls[k]); // each wall's own thickness
   const loop = n > 1 && Math.hypot(points[0].x - points[n].x, points[0].y - points[n].y) < 0.01;
   const outerCorner = (j) => {
     const before = j > 0 ? j - 1 : loop ? n - 1 : null;
     const after = j < n ? j : loop ? 0 : null;
     const p = points[j];
-    const plain = (k) => { const o = outOf(unitOf(k)); return { x: p.x + o.x * WALL_T, y: p.y + o.y * WALL_T }; };
+    const plain = (k) => { const o = outOf(unitOf(k)); return { x: p.x + o.x * T(k), y: p.y + o.y * T(k) }; };
     if (before === null && after === null) return p; // a room with no walls yet
     if (before === null) return plain(after);
     if (after === null) return plain(before);
@@ -188,13 +189,13 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
     const u2 = unitOf(after);
     const o1 = outOf(u1);
     const o2 = outOf(u2);
-    const P = { x: p.x + o1.x * WALL_T, y: p.y + o1.y * WALL_T };
-    const Q = { x: p.x + o2.x * WALL_T, y: p.y + o2.y * WALL_T };
+    const P = { x: p.x + o1.x * T(before), y: p.y + o1.y * T(before) };
+    const Q = { x: p.x + o2.x * T(after), y: p.y + o2.y * T(after) };
     const cross = u1.x * u2.y - u1.y * u2.x;
     if (Math.abs(cross) < 1e-6) return Q;
     const t = ((Q.x - P.x) * u2.y - (Q.y - P.y) * u2.x) / cross;
     const m = { x: P.x + u1.x * t, y: P.y + u1.y * t };
-    return Math.hypot(m.x - p.x, m.y - p.y) > WALL_T * 4 ? Q : m; // very sharp corners: no long spike
+    return Math.hypot(m.x - p.x, m.y - p.y) > Math.max(T(before), T(after)) * 4 ? Q : m; // very sharp corners: no long spike
   };
   const corners = points.map((_, j) => outerCorner(j));
 
@@ -211,7 +212,8 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
     const along = (m) => ({ x: a.x + ux * m, y: a.y + uy * m });
     const ox = nx * -insideSign; // outward normal
     const oy = ny * -insideSign;
-    const outward = (p, d = WALL_T) => ({ x: p.x + ox * d, y: p.y + oy * d });
+    const WT = T(i);
+    const outward = (p, d = WT) => ({ x: p.x + ox * d, y: p.y + oy * d });
 
     const key = `${room.id}|${i}`;
     const hidden = merges.hidden.get(key) || [];
@@ -224,7 +226,25 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
 
     // the wall band, less any stretch another room draws for both
     const wallClass = 'plan-band' + (active && w.id === selectedWallId ? ' selected' : '');
+    // doorways and windows leave real gaps in the band (so a CAD export has
+    // them too): this wall's own openings, and the other room's on a shared
+    // stretch this wall draws
+    const cuts = [
+      ...(w.openings || []).map((o) => openingSpan(w, o))
+        .filter((sp) => !inRanges((sp.startM + sp.endM) / 2, hidden)),
+      ...(merges.extras.get(key) || []).map((x) => ({ startM: x.startM, endM: x.endM })),
+    ].map((sp) => [Math.max(sp.startM, 0), Math.min(sp.endM, len)]).filter(([cs, ce]) => ce - cs > 0.001)
+      .sort((x, y) => x[0] - y[0]);
     const drawStretch = (target, from, to) => {
+      let at = from;
+      cuts.forEach(([cs, ce]) => {
+        if (ce <= at || cs >= to) return;
+        if (cs > at + 0.001) drawPiece(target, at, cs);
+        at = Math.max(at, ce);
+      });
+      if (to > at + 0.001) drawPiece(target, at, to);
+    };
+    const drawPiece = (target, from, to) => {
       const p = along(from);
       const q = along(to);
       const pOut = from < 0.001 ? corners[i] : outward(p);
@@ -251,10 +271,7 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
       let tagText = `${tags[o.id]} ${formatLength(o.widthM, unit)}`;
       const s0 = along(Math.max(span.startM, 0));
       const e0 = along(Math.min(span.endM, w.lengthM));
-      // cut the opening right through the wall band, a hair wider than it
-      const edge = (p, d) => outward(p, d);
-      const cut = [edge(s0, -0.01), edge(e0, -0.01), edge(e0, WALL_T + 0.01), edge(s0, WALL_T + 0.01)];
-      target.appendChild(el('polygon', { points: cut.map((v) => `${v.x},${v.y}`).join(' '), class: 'plan-cut-fill' }));
+      // the band already has a gap here (see cuts above); draw the jambs
       [s0, e0].forEach((p) => {
         const q = outward(p);
         target.appendChild(el('line', {
@@ -268,7 +285,7 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
       const s = towardsRoom ? outward(s0) : s0;
       const e = towardsRoom ? outward(e0) : e0;
       if (o.type === 'window') {
-        [WALL_T / 3, (WALL_T * 2) / 3].forEach((d) => {
+        [WT / 3, (WT * 2) / 3].forEach((d) => {
           const p = outward(s0, d);
           const q = outward(e0, d);
           target.appendChild(el('line', {
@@ -304,6 +321,7 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
         target.appendChild(el('path', {
           d: `M ${tip.x} ${tip.y} A ${r} ${r} 0 0 ${cross > 0 ? 1 : 0} ${latch.x} ${latch.y}`,
           class: 'plan-opening plan-swing',
+          'data-hinge': `${hinge.x},${hinge.y}`, // for the CAD export's arc
           'stroke-width': strokeWidth * 0.3,
         }));
         // tag sits inside the swing, clear of the leaf and the arc
@@ -313,8 +331,8 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
         };
         tagText = tags[o.id];
       } else if (o.type === 'other') {
-        const p = outward(s0, WALL_T / 2);
-        const q = outward(e0, WALL_T / 2);
+        const p = outward(s0, WT / 2);
+        const q = outward(e0, WT / 2);
         target.appendChild(el('line', {
           x1: p.x, y1: p.y, x2: q.x, y2: q.y,
           class: 'plan-opening dotted',
@@ -392,7 +410,7 @@ function drawRoom(svg, room, roomIndex, g, active, ctx) {
       }
       const labelBase = along(labelAt);
       // outside: clear of the wall band too
-      const offset = (fontSize * 0.9 + (print ? 0 : WALL_T)) * labelSide;
+      const offset = (fontSize * 0.9 + (print ? 0 : WT)) * labelSide;
       const lx = labelBase.x + nx * offset;
       const ly = labelBase.y + ny * offset;
       const label = el('text', {

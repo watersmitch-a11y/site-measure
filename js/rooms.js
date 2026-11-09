@@ -29,18 +29,41 @@ import { openingSpan } from './openings.js';
 
 export const DEFAULT_WALL_THICKNESS_M = 0.11;
 
+// A wall's thickness: its own if set (e.g. 230 mm brick), else the default.
+export function wallThickness(wall) {
+  return (wall && wall.thicknessM) || DEFAULT_WALL_THICKNESS_M;
+}
+
 export function newRoom(anchor = null) {
   return {
     id: `r_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
     name: '',
+    number: null,
     ceilingHeightM: null,
     walls: [],
     anchor,
   };
 }
 
+// Unnamed rooms are called by a number given when they're made, so deleting
+// a room doesn't renumber the rest.
 export function roomLabel(room, index) {
-  return room.name || `Room ${index + 1}`;
+  return room.name || `Room ${room.number || index + 1}`;
+}
+
+// Give numbers to rooms that don't have one: their place in the list where
+// that's free (so older jobs keep the names they showed), else the next one.
+export function numberRooms(rooms) {
+  const used = new Set(rooms.map((r) => r.number).filter(Boolean));
+  rooms.forEach((r, i) => {
+    if (r.number) return;
+    r.number = used.has(i + 1) ? Math.max(0, ...used) + 1 : i + 1;
+    used.add(r.number);
+  });
+}
+
+export function nextRoomNumber(rooms) {
+  return Math.max(0, ...rooms.map((r) => r.number || 0)) + 1;
 }
 
 // +1 if the room is on the right of the direction of travel (y down), else -1.
@@ -331,6 +354,7 @@ export function pinAttachedRooms(rooms, isAffected) {
           lengthM: length,
           angle: normalize180(heading - headings[headings.length - 1]),
           openings: sharedOpenings(rooms, geom, room, last, start),
+          ...(anchor.thicknessM && Math.abs(anchor.thicknessM - DEFAULT_WALL_THICKNESS_M) > 0.0005 ? { thicknessM: anchor.thicknessM } : {}),
         });
       }
     }
@@ -434,7 +458,8 @@ export function wallMerges(rooms, geom, maxGap = 0.3) {
         const A = wallFrame(pa, ia);
         rb.walls.forEach((wb, ib) => {
           const B = wallFrame(pb, ib);
-          const ov = facingOverlap(A, B, -0.02, maxGap);
+          // facing walls up to the thicker one's thickness apart are one wall
+          const ov = facingOverlap(A, B, -0.02, Math.max(maxGap, Math.max(wallThickness(wa), wallThickness(wb)) + 0.1));
           if (!ov) return;
           const keyA = `${ra.id}|${ia}`;
           push(merges.hidden, `${rb.id}|${ib}`, ov.b);
@@ -477,7 +502,8 @@ export function snapOffset(rooms, geom, roomId, thicknessM, range = 0.35) {
     other.walls.forEach((wo, io) => {
       const O = wallFrame(po, io);
       if (O.len < 0.01) return;
-      movingWalls.forEach(({ frame: M }) => {
+      movingWalls.forEach(({ frame: M, room: mr, idx: mi }) => {
+        const t = Math.max(wallThickness(wo), wallThickness(mr.walls[mi]));
         if (M.len < 0.01) return;
         const facing = dot(M.n, O.n);
         if (Math.abs(facing) < 0.999) return;
@@ -491,8 +517,8 @@ export function snapOffset(rooms, geom, roomId, thicknessM, range = 0.35) {
           const overlap = Math.min(hi, O.len) - Math.max(lo, 0);
           if (overlap < 0.05) return;
           // only walls a wall-thickness apart (give or take) count as facing
-          if (Math.abs(thicknessM - off) > range) return;
-          options.push({ n: O.n, shift: thicknessM - off });
+          if (Math.abs(t - off) > range) return;
+          options.push({ n: O.n, shift: t - off });
           // line up the ends of the two facing walls
           [[lo, 0], [lo, O.len], [hi, 0], [hi, O.len]].forEach(([mEnd, oEnd]) => {
             if (Math.abs(oEnd - mEnd) <= range) options.push({ n: O.u, shift: oEnd - mEnd });
@@ -500,7 +526,7 @@ export function snapOffset(rooms, geom, roomId, thicknessM, range = 0.35) {
         } else {
           // same side: put the walls in line if they're near each other
           const apart = Math.max(lo - O.len, 0 - hi, 0);
-          if (apart <= thicknessM + range && Math.abs(off) <= range) options.push({ n: O.n, shift: -off });
+          if (apart <= t + range && Math.abs(off) <= range) options.push({ n: O.n, shift: -off });
         }
       });
     });
@@ -572,17 +598,18 @@ export function clearRunTo(rooms, geom, roomId, from, heading, thicknessM = DEFA
     const pts = geom.get(other.id).points;
     if (pts.length < 2) return;
     const sign = insideSign(pts);
-    other.walls.forEach((_, i) => {
+    other.walls.forEach((wall, i) => {
       const a = pts[i];
       const b = pts[i + 1];
       if (!a || !b) return;
       const len = Math.hypot(b.x - a.x, b.y - a.y);
       if (len < 0.01) return;
+      const tw = wallThickness(wall);
       const u = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
-      const o = { x: u.y * sign * thicknessM, y: -u.x * sign * thicknessM }; // outward, a wall thick
+      const o = { x: u.y * sign * tw, y: -u.x * sign * tw }; // outward, a wall thick
       hit(a, b, other);
       // the band's outer face, run on past the corners where bands mitre
-      const ext = { x: u.x * thicknessM, y: u.y * thicknessM };
+      const ext = { x: u.x * tw, y: u.y * tw };
       hit({ x: a.x + o.x - ext.x, y: a.y + o.y - ext.y }, { x: b.x + o.x + ext.x, y: b.y + o.y + ext.y }, other);
     });
   });
@@ -592,7 +619,7 @@ export function clearRunTo(rooms, geom, roomId, from, heading, thicknessM = DEFA
   const blocked = rooms.some((other) => {
     if (other.id === roomId) return false;
     const pts = geom.get(other.id).points;
-    return other.walls.some((_, i) => pts[i] && pts[i + 1] && distToSegment(mid, pts[i], pts[i + 1]) < thicknessM - 0.001);
+    return other.walls.some((wall, i) => pts[i] && pts[i + 1] && distToSegment(mid, pts[i], pts[i + 1]) < wallThickness(wall) - 0.001);
   });
   return blocked ? null : best;
 }
@@ -613,7 +640,7 @@ export function roomGapsNear(rooms, geom, roomId, near, thicknessM = DEFAULT_WAL
   const others = rooms.filter((r) => r.id !== roomId && r.walls.length);
   const walls = others.flatMap((r) => {
     const pts = geom.get(r.id).points;
-    return r.walls.map((_, i) => (pts[i + 1] ? { room: r, f: wallFrame(pts, i) } : null)).filter((w) => w && w.f.len > 0.05);
+    return r.walls.map((wall, i) => (pts[i + 1] ? { room: r, f: wallFrame(pts, i), t: wallThickness(wall) } : null)).filter((w) => w && w.f.len > 0.05);
   });
   const gaps = [];
   walls.forEach((A) => {
@@ -621,8 +648,8 @@ export function roomGapsNear(rooms, geom, roomId, near, thicknessM = DEFAULT_WAL
       if (A.room === B.room) return;
       if (dot(A.f.n, B.f.n) > -0.999) return;
       // the two faces looking at each other
-      const fa = { x: A.f.a.x + A.f.n.x * thicknessM, y: A.f.a.y + A.f.n.y * thicknessM };
-      const fb = { x: B.f.a.x + B.f.n.x * thicknessM, y: B.f.a.y + B.f.n.y * thicknessM };
+      const fa = { x: A.f.a.x + A.f.n.x * A.t, y: A.f.a.y + A.f.n.y * A.t };
+      const fb = { x: B.f.a.x + B.f.n.x * B.t, y: B.f.a.y + B.f.n.y * B.t };
       const gap = dot(sub(fb, fa), A.f.n);
       if (gap < 0.05 || gap > maxGap) return;
       // where they overlap, along A
@@ -695,6 +722,7 @@ export function settleSharedClose(rooms, room, tolerance = 0.06) {
       lengthM: Math.hypot(g2.target.x - end.x, g2.target.y - end.y),
       angle: normalize180(heading - headings[headings.length - 1]),
       openings: [],
+      ...(span.wall.thicknessM ? { thicknessM: span.wall.thicknessM } : {}),
     });
   }
   return true;

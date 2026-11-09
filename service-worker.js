@@ -1,4 +1,4 @@
-const CACHE_NAME = 'site-measure-v30';
+const CACHE_NAME = 'site-measure-v31';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -12,6 +12,9 @@ const CORE_ASSETS = [
   './js/openings.js',
   './js/rooms.js',
   './js/export.js',
+  './js/dxf.js',
+  './js/jobfile.js',
+  './js/photos.js',
   './manifest.json',
 ];
 
@@ -36,17 +39,27 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Network-first so updates show up straight away; falls back to the cache when
-// offline (job data lives in localStorage, so the app still works on site).
+// The saved copy answers straight away, so the app opens instantly even with
+// poor reception on site; the network copy is fetched in the background and
+// saved for next time. New versions arrive as a new service worker (the
+// version number above changes), which reloads the page once it takes over.
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') return;
+  if (event.request.method !== 'GET' || !event.request.url.startsWith(self.location.origin)) return;
   event.respondWith(
-    fetch(event.request, { cache: 'no-cache' })
-      .then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
-        return response;
+    caches.open(CACHE_NAME).then((cache) =>
+      cache.match(event.request, { ignoreSearch: true }).then((cached) => {
+        const fresh = fetch(event.request, { cache: 'no-cache' })
+          .then((response) => {
+            if (response.ok) cache.put(event.request, response.clone());
+            return response;
+          })
+          .catch(() => cached);
+        if (cached) {
+          event.waitUntil(fresh.catch(() => {}));
+          return cached;
+        }
+        return fresh;
       })
-      .catch(() => caches.match(event.request))
+    )
   );
 });
