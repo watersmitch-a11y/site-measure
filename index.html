@@ -147,12 +147,14 @@
       </div>
       <ul id="wallList" class="wall-list"></ul>
       <button id="closePolygonBtn" class="secondary-btn hidden">Complete Perimeter (Close Shape)</button>
+      <button id="finishInsertBtn" type="button" class="secondary-btn hidden">Finish inserting walls</button>
     </section>
 
     <section class="room-card">
       <div class="room-card-row">
         <input id="roomName" class="room-name-input" type="text" aria-label="Room name" />
         <button id="moveRoomBtn" type="button" class="text-btn hidden">Move room</button>
+        <button id="separateRoomBtn" type="button" class="text-btn hidden">Separate room</button>
         <button id="deleteRoomBtn" type="button" class="text-btn danger-text hidden">Delete room</button>
       </div>
       <div id="roomAnchorNote" class="anchor-note hidden"></div>
@@ -188,6 +190,17 @@
         </div>
         <p id="panelLengthError" class="error-text hidden"></p>
         <button id="updateLengthBtn" type="button" class="secondary-btn">Update Length</button>
+      </div>
+
+      <div class="panel-section">
+        <div class="field-label">Break this wall to add a step or nib along it</div>
+        <select id="breakEndSelect" class="panel-select">
+          <option value="start">From the left end</option>
+          <option value="end">From the right end</option>
+        </select>
+        <div id="breakAtInputs" class="length-inputs"></div>
+        <p id="breakError" class="error-text hidden"></p>
+        <button id="breakWallBtn" type="button" class="secondary-btn">Break here &amp; insert walls</button>
       </div>
 
       <div class="panel-section">

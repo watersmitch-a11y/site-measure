@@ -279,6 +279,40 @@ export function sharedWallArea(rooms, room, heightM) {
 // Before a host room or wall is deleted, pin any rooms attached to it at
 // their current position so they don't jump. A shared-wall room gets its
 // shared wall added as a real wall, since it no longer has a host to share.
+// The host's doors and windows in the stretch a shared-wall room shares, as
+// openings of a new wall of that room running from a to b, seen from its side:
+// a door hinged on the host's left and opening into the host is hinged on
+// this room's right and opens out of it.
+function sharedOpenings(rooms, geom, room, a, b) {
+  const span = sharedSpan(rooms, room);
+  if (!span) return [];
+  const hp = geom.get(span.host.id).points;
+  const p = hp[span.wallIdx];
+  const q = hp[span.wallIdx + 1];
+  if (!p || !q) return [];
+  const hl = Math.hypot(q.x - p.x, q.y - p.y) || 1;
+  const len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+  const u = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
+  const at = (m) => ({ x: p.x + ((q.x - p.x) / hl) * m, y: p.y + ((q.y - p.y) / hl) * m });
+  const along = (pt) => (pt.x - a.x) * u.x + (pt.y - a.y) * u.y;
+  return (span.wall.openings || []).flatMap((o) => {
+    const os = openingSpan(span.wall, o);
+    const t = [along(at(os.startM)), along(at(os.endM))].sort((x, y) => x - y);
+    if (t[1] < 0.01 || t[0] > len - 0.01) return []; // outside the shared stretch
+    const copy = {
+      ...o,
+      id: `o_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      fromCorner: 'start',
+      offsetM: Math.max(0, t[0]),
+    };
+    if (o.type === 'door') {
+      copy.hinge = o.hinge === 'right' ? 'left' : 'right';
+      copy.swing = o.swing === 'out' ? 'in' : 'out';
+    }
+    return [copy];
+  });
+}
+
 export function pinAttachedRooms(rooms, isAffected) {
   const geom = roomGeometry(rooms);
   rooms.forEach((room) => {
@@ -296,6 +330,7 @@ export function pinAttachedRooms(rooms, isAffected) {
           id: `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           lengthM: length,
           angle: normalize180(heading - headings[headings.length - 1]),
+          openings: sharedOpenings(rooms, geom, room, last, start),
         });
       }
     }
@@ -432,17 +467,17 @@ export function wallMerges(rooms, geom, maxGap = 0.3) {
 //  - along it: walls on the same side (a continuous front wall) end up in
 //    line, or the ends of the facing walls line up
 // Each only applies within `range` of where the room was dropped.
+// roomId can be a list of ids: rooms moved together as one group.
 export function snapOffset(rooms, geom, roomId, thicknessM, range = 0.35) {
-  const moving = rooms.find((r) => r.id === roomId);
-  const pm = geom.get(roomId).points;
+  const ids = new Set([].concat(roomId));
+  const movingWalls = groupWalls(rooms, geom, ids);
   const options = []; // { n: direction to move along, shift: metres }
-  rooms.filter((r) => r !== moving).forEach((other) => {
+  rooms.filter((r) => !ids.has(r.id)).forEach((other) => {
     const po = geom.get(other.id).points;
     other.walls.forEach((wo, io) => {
       const O = wallFrame(po, io);
       if (O.len < 0.01) return;
-      moving.walls.forEach((wm, im) => {
-        const M = wallFrame(pm, im);
+      movingWalls.forEach(({ frame: M }) => {
         if (M.len < 0.01) return;
         const facing = dot(M.n, O.n);
         if (Math.abs(facing) < 0.999) return;
@@ -486,16 +521,15 @@ export function snapOffset(rooms, geom, roomId, thicknessM, range = 0.35) {
 // the other wall from its start, and lo/hi are where this room's wall starts
 // and ends along it. null if no facing wall is within maxGap.
 export function nearestFacingWall(rooms, geom, roomId, maxGap = 1.5) {
-  const moving = rooms.find((r) => r.id === roomId);
-  const pm = geom.get(roomId).points;
+  const ids = new Set([].concat(roomId));
+  const movingWalls = groupWalls(rooms, geom, ids);
   let best = null;
-  rooms.filter((r) => r !== moving).forEach((other) => {
+  rooms.filter((r) => !ids.has(r.id)).forEach((other) => {
     const po = geom.get(other.id).points;
     other.walls.forEach((wo, io) => {
       const O = wallFrame(po, io);
       if (O.len < 0.01) return;
-      moving.walls.forEach((wm, im) => {
-        const M = wallFrame(pm, im);
+      movingWalls.forEach(({ frame: M, idx: im }) => {
         if (M.len < 0.01 || dot(M.n, O.n) > -0.999) return;
         const gap = dot(sub(M.a, O.a), O.n);
         if (gap < -0.05 || gap > maxGap) return;
@@ -617,4 +651,115 @@ export function roomGapsNear(rooms, geom, roomId, near, thicknessM = DEFAULT_WAL
     });
   });
   return gaps;
+}
+
+// A shared-wall room whose last wall ends on the shared wall's line, but not
+// at the end it was expected to close at (the room is narrower or wider than
+// the stretch picked when placing it): make the shared stretch end where the
+// walls do, as far as the host wall goes, and close any part beyond the host
+// wall with a wall of the room's own along the same line. Returns true if
+// anything changed.
+export function settleSharedClose(rooms, room, tolerance = 0.06) {
+  const anchor = room.anchor;
+  if (!anchor || !anchor.shared || room.walls.length < 2) return false;
+  const span = sharedSpan(rooms, room);
+  if (!span) return false;
+  const g = roomGeometry(rooms).get(room.id);
+  const last = g.points[g.points.length - 1];
+  const start = g.points[0];
+  const L = Math.hypot(g.target.x - start.x, g.target.y - start.y);
+  if (L < 0.01) return false;
+  const u = { x: (g.target.x - start.x) / L, y: (g.target.y - start.y) / L };
+  const rel = sub(last, start);
+  const across = Math.abs(rel.x * u.y - rel.y * u.x);
+  const s = dot(rel, u); // how far along the shared line the walls end
+  if (across > tolerance || Math.abs(s - L) <= 0.005 || s < 0.05) return false;
+  // the start end of the stretch stays put; the other end moves to s
+  const hostLen = span.wall.lengthM;
+  const room0 = anchor.reversed ? anchor.offsetM : anchor.offsetM + anchor.lengthM; // start, along the host wall
+  const dir = anchor.reversed ? 1 : -1; // towards the target, along the host wall
+  const room1 = Math.min(Math.max(room0 + dir * s, 0), hostLen);
+  const shared = Math.abs(room1 - room0);
+  if (shared < 0.05) return false;
+  anchor.lengthM = shared;
+  if (!anchor.reversed) anchor.offsetM = room1;
+  // the part past the end of the host wall is a wall of this room
+  const rest = s - shared;
+  if (rest > 0.005) {
+    const g2 = roomGeometry(rooms).get(room.id);
+    const end = g2.points[g2.points.length - 1];
+    const heading = headingOf(g2.target.x - end.x, g2.target.y - end.y);
+    const headings = computeHeadings(room.walls, g2.frame.heading);
+    room.walls.push({
+      id: `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      lengthM: Math.hypot(g2.target.x - end.x, g2.target.y - end.y),
+      angle: normalize180(heading - headings[headings.length - 1]),
+      openings: [],
+    });
+  }
+  return true;
+}
+
+// Every wall of the given rooms, with its frame.
+function groupWalls(rooms, geom, ids) {
+  return rooms.filter((r) => ids.has(r.id)).flatMap((r) => {
+    const pts = geom.get(r.id).points;
+    return r.walls.map((_, idx) => (pts[idx + 1] ? { room: r, idx, frame: wallFrame(pts, idx) } : null)).filter(Boolean);
+  });
+}
+
+// Rooms that move together with `room`: joined by a shared wall (either way
+// round), or with walls touching or facing a wall's thickness apart, and so
+// on through their neighbours.
+export function joinedRooms(rooms, geom, room, direct = false) {
+  const merges = wallMerges(rooms, geom);
+  const links = new Map(rooms.map((r) => [r.id, new Set()]));
+  const link = (a, b) => {
+    if (!links.has(a) || !links.has(b) || a === b) return;
+    links.get(a).add(b);
+    links.get(b).add(a);
+  };
+  rooms.forEach((r) => {
+    if (r.anchor && r.anchor.type === 'wall') link(r.id, r.anchor.roomId);
+  });
+  // rooms that were separated don't pull each other along just by touching
+  const apart = (a, b) => (rooms.find((r) => r.id === a)?.apart || []).includes(b);
+  merges.shared.forEach((list, key) => {
+    const id = key.slice(0, key.lastIndexOf('|'));
+    list.forEach((sh) => { if (!apart(id, sh.otherRoomId)) link(id, sh.otherRoomId); });
+  });
+  if (direct) return rooms.filter((r) => links.get(room.id).has(r.id));
+  const seen = new Set([room.id]);
+  const queue = [room.id];
+  while (queue.length) {
+    links.get(queue.shift()).forEach((id) => {
+      if (!seen.has(id)) {
+        seen.add(id);
+        queue.push(id);
+      }
+    });
+  }
+  return rooms.filter((r) => seen.has(r.id));
+}
+
+// The rooms of a group that hold its position: the ones not hanging off
+// another room's wall in the group. Moving these moves the lot.
+export function groupRoots(group) {
+  const ids = new Set(group.map((r) => r.id));
+  return group.filter((r) => !(r.anchor && r.anchor.type === 'wall' && ids.has(r.anchor.roomId)));
+}
+
+// Unjoin a room from every room it's joined to: a shared wall it hangs off
+// becomes a wall of its own (with the doors and windows in it), rooms hanging
+// off it get their own copy likewise, and rooms it just touches no longer
+// move with it. Each room keeps where it is. Returns the rooms it was joined to.
+export function separateRoom(rooms, room) {
+  const geom = roomGeometry(rooms);
+  const joined = joinedRooms(rooms, geom, room, true);
+  pinAttachedRooms(rooms, (a) => a === room.anchor || a.roomId === room.id);
+  joined.forEach((other) => {
+    room.apart = [...new Set([...(room.apart || []), other.id])];
+    other.apart = [...new Set([...(other.apart || []), room.id])];
+  });
+  return joined;
 }

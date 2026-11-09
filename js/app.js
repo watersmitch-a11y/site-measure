@@ -8,7 +8,7 @@ import * as rm from './rooms.js';
 import { exportPlan } from './export.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-const APP_VERSION = 29;
+const APP_VERSION = 30;
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -56,6 +56,7 @@ function activeLabel() {
 
 const ui = {
   selectedHeading: null, // direction on the plan in degrees (0 up, 90 right…), or 'custom'
+  insertAt: null, // inserting walls before this wall index (after breaking a wall)
   customSide: 'left',
   editingId: null,
   panelWallId: null, // wall whose details panel is open
@@ -136,6 +137,12 @@ const els = {
   zoomOutBtn: $('#zoomOutBtn'),
   zoomFitBtn: $('#zoomFitBtn'),
   moveRoomBtn: $('#moveRoomBtn'),
+  separateRoomBtn: $('#separateRoomBtn'),
+  breakEndSelect: $('#breakEndSelect'),
+  breakAtInputs: $('#breakAtInputs'),
+  breakError: $('#breakError'),
+  breakWallBtn: $('#breakWallBtn'),
+  finishInsertBtn: $('#finishInsertBtn'),
   panelMoveRoomBtn: $('#panelMoveRoomBtn'),
   panelLengthInputs: $('#panelLengthInputs'),
   keepClosedRow: $('#keepClosedRow'),
@@ -272,7 +279,8 @@ function wallHeadings() {
 
 // Index of the wall being entered: the one being edited, or the next new one.
 function entryIndex() {
-  return ui.editingId ? state.walls.findIndex((w) => w.id === ui.editingId) : state.walls.length;
+  if (ui.editingId) return state.walls.findIndex((w) => w.id === ui.editingId);
+  return ui.insertAt != null ? ui.insertAt : state.walls.length;
 }
 
 // Direction of the wall before the one being entered, or null for Wall 1.
@@ -340,7 +348,7 @@ function roomGaps() {
   const room = activeRoom();
   if (!room || ui.moving || ui.placingRoom || ui.placement) return [];
   const g = geometryOf(room);
-  if (!ui.editingId && rm.roomClosed(room, g)) return [];
+  if (!ui.editingId && ui.insertAt == null && rm.roomClosed(room, g)) return [];
   const near = [g.points[0], g.points[entryIndex()], g.target].filter(Boolean); // start, open end, where it closes
   if (!near.length) return [];
   const runs = gapDims();
@@ -356,7 +364,7 @@ function gapDims() {
   const room = activeRoom();
   if (!room || ui.moving || ui.placingRoom || ui.placement) return [];
   const g = geometryOf(room);
-  if (!ui.editingId && rm.roomClosed(room, g)) return [];
+  if (!ui.editingId && ui.insertAt == null && rm.roomClosed(room, g)) return [];
   const from = g.points[entryIndex()];
   if (!from) return [];
   const chosen = selectedAbsoluteHeading();
@@ -448,7 +456,7 @@ function render() {
   updateMoveDims();
   renderStats();
   renderWallList();
-  els.closePolygonBtn.classList.toggle('hidden', state.walls.length < rm.minWallsToClose(activeRoom()));
+  els.closePolygonBtn.classList.toggle('hidden', ui.insertAt != null || state.walls.length < rm.minWallsToClose(activeRoom()));
 }
 
 // ---------- plan view and zoom ----------
@@ -502,13 +510,12 @@ function planFraction(clientX, clientY) {
 }
 
 function renderEntryTitle() {
-  const nextIndex = ui.editingId
-    ? state.walls.findIndex((w) => w.id === ui.editingId)
-    : state.walls.length;
+  const nextIndex = entryIndex();
   const roomPrefix = state.rooms.length > 1 ? `${activeLabel()} – ` : '';
-  els.entryTitle.textContent = ui.editingId
-    ? `${roomPrefix}Editing Wall ${nextIndex + 1}`
-    : `${roomPrefix}Wall ${nextIndex + 1}`;
+  if (ui.editingId) els.entryTitle.textContent = `${roomPrefix}Editing Wall ${nextIndex + 1}`;
+  else if (ui.insertAt != null) els.entryTitle.textContent = `${roomPrefix}Inserting a wall after Wall ${nextIndex}`;
+  else els.entryTitle.textContent = `${roomPrefix}Wall ${nextIndex + 1}`;
+  els.finishInsertBtn.classList.toggle('hidden', ui.insertAt == null || !!ui.editingId);
 }
 
 function renderStats() {
@@ -642,11 +649,22 @@ function handleAddWall() {
       const delta = wallHeadings()[editIdx] - before[editIdx];
       next.angle = normalizeAngle180(next.angle - delta);
     }
+  } else if (ui.insertAt != null) {
+    // a step or nib at a break: the walls after it keep their directions
+    const at = ui.insertAt;
+    const before = wallHeadings();
+    state.walls.splice(at, 0, { id: uid(), lengthM, angle, openings: [] });
+    const next = state.walls[at + 1];
+    if (next) next.angle = normalizeAngle180(next.angle - (wallHeadings()[at + 1] - before[at]));
+    ui.insertAt = at + 1;
   } else {
     state.walls.push({ id: uid(), lengthM, angle });
   }
 
-  settleSharedStart(activeRoom());
+  if (ui.insertAt == null) {
+    settleSharedStart(activeRoom());
+    rm.settleSharedClose(state.rooms, activeRoom());
+  }
   resetEntryForm();
   persist();
   render();
@@ -713,6 +731,7 @@ function handleEditWall(id) {
   if (idx < 0) return;
   const wall = state.walls[idx];
   ui.editingId = id;
+  ui.insertAt = null;
   const heading = ((wallHeadings()[idx] % 360) + 360) % 360;
   const square = [0, 90, 180, 270, 360].find((h) => Math.abs(h - heading) < 0.01);
   if (square !== undefined) {
@@ -931,6 +950,14 @@ function openWallPanel(id) {
   setLength(state.unit, 'panelLen', wall.lengthM);
   els.panelLengthError.classList.add('hidden');
   fillKeepClosed();
+  buildLengthInput(els.breakAtInputs, state.unit, 'breakAt', 'Distance along the wall');
+  els.breakError.classList.add('hidden');
+  const breakEnds = planEnds(idx);
+  els.breakEndSelect.options[0].textContent = `From the ${breakEnds[breakEnds.first]} end`;
+  els.breakEndSelect.options[0].value = breakEnds.first;
+  const secondEnd = breakEnds.first === 'start' ? 'end' : 'start';
+  els.breakEndSelect.options[1].textContent = `From the ${breakEnds[secondEnd]} end`;
+  els.breakEndSelect.options[1].value = secondEnd;
   buildLengthInput(els.wallCeilingInputs, state.unit, 'wallCeil', 'Same as room');
   setLength(state.unit, 'wallCeil', wall.ceilingHeightM || null);
   // left/top end on the left-hand button, so the toggle reads like the plan
@@ -1024,6 +1051,7 @@ function handleUpdateLength() {
   wall.lengthM = newLen;
   if (partner) partner.w.lengthM += partner.sign * delta;
   settleSharedStart(room);
+  rm.settleSharedClose(state.rooms, room);
   persist();
   openWallPanel(wall.id); // refresh the title, figures and choices
 }
@@ -1234,6 +1262,8 @@ function renderRoomCard() {
   els.roomName.placeholder = `Room ${roomIndex(room) + 1}`;
   els.deleteRoomBtn.classList.toggle('hidden', state.rooms.length < 2);
   els.moveRoomBtn.classList.toggle('hidden', !canMove(room) || !!ui.moving);
+  const joined = room.walls.length ? rm.joinedRooms(state.rooms, rm.roomGeometry(state.rooms), room, true) : [];
+  els.separateRoomBtn.classList.toggle('hidden', !joined.length || !!ui.moving);
   const anchorText = anchorDescription(room);
   els.roomAnchorNote.textContent = anchorText;
   els.roomAnchorNote.classList.toggle('hidden', !anchorText);
@@ -1243,6 +1273,7 @@ function setActiveRoom(id) {
   if (!state.rooms.some((r) => r.id === id)) return;
   if (ui.moving) endMove(true);
   state.activeRoomId = id;
+  ui.insertAt = null;
   closeWallPanel();
   resetEntryForm();
   buildCeilingInput();
@@ -1250,21 +1281,115 @@ function setActiveRoom(id) {
   render();
 }
 
+// Split a wall in two on the same line, then insert walls at the split (a
+// step or nib); the walls after keep their directions on the plan.
+function handleBreakWall() {
+  const idx = state.walls.findIndex((w) => w.id === ui.panelWallId);
+  if (idx < 0) return;
+  const wall = state.walls[idx];
+  const showError = (msg) => {
+    els.breakError.textContent = msg;
+    els.breakError.classList.remove('hidden');
+  };
+  const d = readLength(state.unit, 'breakAt');
+  if (d == null) return showError('Enter how far along the wall the break is.');
+  const at = els.breakEndSelect.value === 'end' ? wall.lengthM - d : d; // from the wall's start
+  if (at < 0.01 || at > wall.lengthM - 0.01) return showError('The break has to be part way along the wall.');
+  const tags = op.openingTags(allWalls());
+  const cut = (wall.openings || []).find((o) => {
+    const sp = op.openingSpan(wall, o);
+    return sp.startM < at - 0.001 && sp.endM > at + 0.001;
+  });
+  if (cut) return showError(`The break falls in ${tags[cut.id]}; break the wall clear of it.`);
+  const children = state.rooms.filter((r) => r.anchor && r.anchor.type === 'wall' && r.anchor.wallId === wall.id);
+  const across = children.find((r) => r.anchor.shared &&
+    r.anchor.offsetM < at - 0.001 && r.anchor.offsetM + r.anchor.lengthM > at + 0.001);
+  if (across) return showError(`${rm.roomLabel(across, roomIndex(across))} shares this wall across the break; separate it first.`);
+
+  const rest = { id: uid(), lengthM: wall.lengthM - at, angle: 0, openings: [] };
+  if (wall.ceilingHeightM) rest.ceilingHeightM = wall.ceilingHeightM;
+  const keep = [];
+  (wall.openings || []).forEach((o) => {
+    const sp = op.openingSpan(wall, o);
+    if (sp.endM <= at + 0.001) {
+      keep.push(o.fromCorner === 'end' ? { ...o, offsetM: at - sp.endM } : o);
+    } else {
+      rest.openings.push(o.fromCorner === 'end' ? o : { ...o, offsetM: sp.startM - at });
+    }
+  });
+  wall.openings = keep;
+  wall.lengthM = at;
+  state.walls.splice(idx + 1, 0, rest);
+  // rooms sharing the far piece now hang off it
+  children.forEach((r) => {
+    if (r.anchor.offsetM >= at - 0.001) {
+      r.anchor.wallId = rest.id;
+      r.anchor.offsetM -= at;
+    }
+  });
+  const wasClosed = rm.roomClosed(activeRoom(), geometryOf(activeRoom()));
+  closeWallPanel();
+  resetEntryForm();
+  ui.insertAt = idx + 1;
+  ui.insertRest = wasClosed ? rest.id : null; // shortened on Finish to keep the room closed
+  persist();
+  render();
+  $('#entryCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// Unjoin the room from the rooms it shares or touches walls with, so it can be
+// moved on its own; a shared wall becomes a wall of each room.
+async function handleSeparateRoom() {
+  const room = activeRoom();
+  const geom = rm.roomGeometry(state.rooms);
+  const joined = rm.joinedRooms(state.rooms, geom, room, true);
+  if (!joined.length) return;
+  if (room.anchor && room.anchor.shared && !rm.roomClosed(room, geom.get(room.id))) {
+    await showConfirm(`Finish ${activeLabel()}'s walls back to the shared wall first, then separate it.`);
+    return;
+  }
+  const names = joined.map((r) => rm.roomLabel(r, roomIndex(r))).join(', ');
+  const ok = await showConfirm(`Separate ${activeLabel()} from ${names}? Each room keeps its own copy of any shared wall, ` +
+    'with its doors and windows, and they no longer move together.');
+  if (!ok) return;
+  rm.separateRoom(state.rooms, room);
+  persist();
+  render();
+}
+
 // ---------- moving a room ----------
-// Rooms that aren't attached to another room's wall can be dragged, nudged
-// and turned, or lined up with another room by a doorway measured in both.
+// A room can be dragged, nudged and turned, or lined up with another room by
+// a doorway measured in both. Rooms joined to it (by a shared wall, or walls
+// touching) move with it as one group; Separate in the room card unjoins it.
 
 function canMove(room) {
-  return room.walls.length > 0 && (!room.anchor || room.anchor.type === 'fixed');
+  return room.walls.length > 0;
 }
 
 function startMove() {
   const room = activeRoom();
   if (!canMove(room)) return;
   closeWallPanel();
-  ui.moving = { roomId: room.id, before: JSON.stringify({ anchor: room.anchor, first: room.walls[0].angle }) };
-  if (!room.anchor) room.anchor = { type: 'fixed', x: 0, y: 0, heading: null };
-  els.moveTitle.textContent = `Moving ${activeLabel()}: drag it on the plan, or nudge it`;
+  const geom = rm.roomGeometry(state.rooms);
+  const group = rm.joinedRooms(state.rooms, geom, room);
+  const roots = rm.groupRoots(group);
+  ui.moving = {
+    roomId: room.id,
+    groupIds: group.map((r) => r.id),
+    rootIds: roots.map((r) => r.id),
+    before: JSON.stringify(roots.map((r) => ({ id: r.id, anchor: r.anchor, first: r.walls[0] ? r.walls[0].angle : null }))),
+  };
+  // the rooms holding the group's position become free-standing at where they are
+  roots.forEach((r) => {
+    if (!r.anchor || r.anchor.type !== 'fixed') {
+      const f = geom.get(r.id).frame;
+      r.anchor = { type: 'fixed', x: f.x, y: f.y, heading: f.heading };
+    }
+  });
+  const others = group.filter((r) => r !== room).map((r) => rm.roomLabel(r, roomIndex(r)));
+  els.moveTitle.textContent = others.length
+    ? `Moving ${activeLabel()} with ${others.join(', ')} (joined): drag, or nudge`
+    : `Moving ${activeLabel()}: drag it on the plan, or nudge it`;
   els.moveBar.classList.remove('hidden');
   els.planWrap.classList.add('moving');
   render();
@@ -1274,11 +1399,13 @@ function startMove() {
 function endMove(keep) {
   const moving = ui.moving;
   if (!moving) return;
-  const room = state.rooms.find((r) => r.id === moving.roomId);
-  if (room && !keep) {
-    const before = JSON.parse(moving.before);
-    room.anchor = before.anchor;
-    if (room.walls[0]) room.walls[0].angle = before.first;
+  if (!keep) {
+    JSON.parse(moving.before).forEach((b) => {
+      const r = state.rooms.find((x) => x.id === b.id);
+      if (!r) return;
+      r.anchor = b.anchor;
+      if (r.walls[0] && b.first != null) r.walls[0].angle = b.first;
+    });
   }
   ui.moving = null;
   els.moveBar.classList.add('hidden');
@@ -1295,7 +1422,7 @@ function endMove(keep) {
 function updateMoveDims() {
   const room = movingRoom();
   if (!room) return;
-  const ref = rm.nearestFacingWall(state.rooms, rm.roomGeometry(state.rooms), room.id);
+  const ref = rm.nearestFacingWall(state.rooms, rm.roomGeometry(state.rooms), ui.moving.groupIds);
   ui.moving.ref = null;
   if (ui.moving.dimsUnit !== state.unit) {
     buildLengthInput(els.moveGapInputs, state.unit, 'mvGap');
@@ -1350,7 +1477,7 @@ function applyMoveDim(which) {
   const value = readLength(state.unit, which === 'gap' ? 'mvGap' : 'mvAlong', opts);
   if (value == null) return;
   const [dir, now] = which === 'gap' ? [ref.n, ref.gap] : [ref.dir, ref.along];
-  shiftRoom(room, dir.x * (value - now), dir.y * (value - now));
+  shiftGroup(dir.x * (value - now), dir.y * (value - now));
   render();
 }
 
@@ -1365,29 +1492,57 @@ function shiftRoom(room, dx, dy) {
   room.anchor.y = round3(room.anchor.y + dy);
 }
 
+// The rooms that hold the moving group's position; the rest hang off them.
+function movingRoots() {
+  if (!ui.moving) return [];
+  return ui.moving.rootIds.map((id) => state.rooms.find((r) => r.id === id)).filter(Boolean);
+}
+
+function movingGroup() {
+  if (!ui.moving) return [];
+  return ui.moving.groupIds.map((id) => state.rooms.find((r) => r.id === id)).filter(Boolean);
+}
+
+function shiftGroup(dx, dy) {
+  movingRoots().forEach((r) => shiftRoom(r, dx, dy));
+}
+
+// Turn the whole group by deg (clockwise on the plan) about the point c.
+function turnGroup(deg, c) {
+  const rad = (deg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  movingRoots().forEach((r) => {
+    const x = r.anchor.x - c.x;
+    const y = r.anchor.y - c.y;
+    r.anchor.x = round3(c.x + x * cos - y * sin);
+    r.anchor.y = round3(c.y + x * sin + y * cos);
+    turnRoom(r, deg);
+  });
+}
+
+function groupCentre() {
+  const pts = movingGroup().flatMap((r) => geometryOf(r).points);
+  return {
+    x: pts.reduce((sum, p) => sum + p.x, 0) / (pts.length || 1),
+    y: pts.reduce((sum, p) => sum + p.y, 0) / (pts.length || 1),
+  };
+}
+
 // Turn a room by deg (clockwise on the plan) about its start point.
 function turnRoom(room, deg) {
   const norm = (a) => ((a % 360) + 360) % 360;
-  if (room.anchor.heading != null) room.anchor.heading = norm(room.anchor.heading + deg);
+  if (room.anchor.heading != null || !room.walls[0]) room.anchor.heading = norm((room.anchor.heading || 0) + deg);
   else room.walls[0].angle = norm(room.walls[0].angle + deg);
-}
-
-function roomCentre(room) {
-  const pts = geometryOf(room).points;
-  return {
-    x: pts.reduce((sum, p) => sum + p.x, 0) / pts.length,
-    y: pts.reduce((sum, p) => sum + p.y, 0) / pts.length,
-  };
 }
 
 // The rotate buttons turn the room about its middle so it stays in view.
 function rotateMoving(deg) {
-  const room = movingRoom();
-  if (!room) return;
-  const before = roomCentre(room);
-  turnRoom(room, deg);
-  const after = roomCentre(room);
-  shiftRoom(room, before.x - after.x, before.y - after.y);
+  if (!movingRoom()) return;
+  const before = groupCentre();
+  turnGroup(deg, before);
+  const after = groupCentre();
+  shiftGroup(before.x - after.x, before.y - after.y);
   render();
 }
 
@@ -1409,8 +1564,9 @@ function doorwayLabel(d, withRoom) {
 function openDoorMatch() {
   const room = movingRoom();
   if (!room) return;
-  const here = doorwaysOf(room);
-  const there = state.rooms.filter((r) => r !== room).flatMap(doorwaysOf);
+  const group = movingGroup();
+  const here = group.flatMap(doorwaysOf);
+  const there = state.rooms.filter((r) => !group.includes(r)).flatMap(doorwaysOf);
   const fill = (select, list, withRoom) => {
     select.innerHTML = '';
     list.forEach((d) => {
@@ -1420,7 +1576,7 @@ function openDoorMatch() {
       select.appendChild(opt);
     });
   };
-  fill(els.doorHereSelect, here, false);
+  fill(els.doorHereSelect, here, group.length > 1);
   fill(els.doorThereSelect, there, true);
   buildLengthInput($('#doorThicknessInputs'), state.unit, 'doorThick');
   setLength(state.unit, 'doorThick', rm.DEFAULT_WALL_THICKNESS_M);
@@ -1472,11 +1628,11 @@ function handleDoorMatch() {
   const nHere = outwardNormal(here.room, here.wallIdx);
   const nThere = outwardNormal(there.room, there.wallIdx);
   const turn = normalizeAngle180(headingOf({ x: -nThere.x, y: -nThere.y }) - headingOf(nHere));
-  if (Math.abs(turn) > 0.01) turnRoom(room, Math.round(turn * 100) / 100);
+  if (Math.abs(turn) > 0.01) turnGroup(Math.round(turn * 100) / 100, groupCentre());
   // 2. slide it so the doorways line up, the wall thickness apart
   const from = doorwayCentre(findDoorway(here.opening.id));
   const to = doorwayCentre(there);
-  shiftRoom(room, to.x + nThere.x * thick - from.x, to.y + nThere.y * thick - from.y);
+  shiftGroup(to.x + nThere.x * thick - from.x, to.y + nThere.y * thick - from.y);
   els.doorMatchPanel.classList.add('hidden');
   render();
 }
@@ -1867,8 +2023,7 @@ els.planSvg.addEventListener('pointerdown', (e) => {
     clientX: e.clientX,
     clientY: e.clientY,
     metresPerPx: Math.max(vb.width / r.width, vb.height / r.height), // the view is fitted ('meet')
-    x: room.anchor.x,
-    y: room.anchor.y,
+    starts: movingRoots().map((root) => ({ root, x: root.anchor.x, y: root.anchor.y })),
   };
   els.planSvg.setPointerCapture(e.pointerId);
 });
@@ -1878,8 +2033,10 @@ els.planSvg.addEventListener('pointermove', (e) => {
   const room = movingRoom();
   const drag = ui.moving && ui.moving.drag;
   if (!room || !drag) return;
-  room.anchor.x = round3(drag.x + (e.clientX - drag.clientX) * drag.metresPerPx);
-  room.anchor.y = round3(drag.y + (e.clientY - drag.clientY) * drag.metresPerPx);
+  drag.starts.forEach(({ root, x, y }) => {
+    root.anchor.x = round3(x + (e.clientX - drag.clientX) * drag.metresPerPx);
+    root.anchor.y = round3(y + (e.clientY - drag.clientY) * drag.metresPerPx);
+  });
   // redraw at most once per screen refresh
   if (dragFrame === null) {
     dragFrame = requestAnimationFrame(() => {
@@ -1895,8 +2052,8 @@ const endDrag = () => {
   ui.moving.drag = null;
   ui.moving.viewBox = null;
   const room = movingRoom();
-  const snap = room && rm.snapOffset(state.rooms, rm.roomGeometry(state.rooms), room.id, rm.DEFAULT_WALL_THICKNESS_M);
-  if (snap) shiftRoom(room, snap.dx, snap.dy);
+  const snap = room && rm.snapOffset(state.rooms, rm.roomGeometry(state.rooms), ui.moving.groupIds, rm.DEFAULT_WALL_THICKNESS_M);
+  if (snap) shiftGroup(snap.dx, snap.dy);
   render();
 };
 els.planSvg.addEventListener('pointerup', endDrag);
@@ -2042,6 +2199,35 @@ $('#thicknessInputs').addEventListener('input', () => {
 els.createRoomBtn.addEventListener('click', handleCreateRoom);
 
 els.moveRoomBtn.addEventListener('click', startMove);
+els.separateRoomBtn.addEventListener('click', handleSeparateRoom);
+els.breakWallBtn.addEventListener('click', handleBreakWall);
+els.finishInsertBtn.addEventListener('click', () => {
+  // The wall was measured end to end, so a step along it comes off the rest
+  // of the wall: shorten (or lengthen) that piece to close the room again.
+  const room = activeRoom();
+  const rest = ui.insertRest && state.walls.find((w) => w.id === ui.insertRest);
+  if (rest) {
+    const g = geometryOf(room);
+    const last = g.points[g.points.length - 1];
+    const gx = g.target.x - last.x;
+    const gy = g.target.y - last.y;
+    const i = state.walls.indexOf(rest);
+    const a = g.points[i];
+    const b = g.points[i + 1];
+    const ux = (b.x - a.x) / (rest.lengthM || 1);
+    const uy = (b.y - a.y) / (rest.lengthM || 1);
+    const along = gx * ux + gy * uy;
+    const across = Math.abs(gx * uy - gy * ux);
+    if (Math.hypot(gx, gy) > 0.005 && across < 0.005 && rest.lengthM + along > 0.01) {
+      rest.lengthM = Math.round((rest.lengthM + along) * 1000) / 1000;
+      persist();
+    }
+  }
+  ui.insertRest = null;
+  ui.insertAt = null;
+  resetEntryForm();
+  render();
+});
 els.panelMoveRoomBtn.addEventListener('click', startMove); // startMove closes the wall panel
 els.doneMoveBtn.addEventListener('click', () => endMove(true));
 els.cancelMoveBtn.addEventListener('click', () => endMove(false));
@@ -2052,7 +2238,7 @@ els.nudgePad.addEventListener('click', (e) => {
   const room = movingRoom();
   if (!btn || !room) return;
   const step = Number(els.nudgeStep.value);
-  shiftRoom(room, Number(btn.dataset.dx) * step, Number(btn.dataset.dy) * step);
+  shiftGroup(Number(btn.dataset.dx) * step, Number(btn.dataset.dy) * step);
   render();
 });
 els.matchDoorBtn.addEventListener('click', openDoorMatch);
