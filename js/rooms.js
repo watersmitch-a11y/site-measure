@@ -570,3 +570,51 @@ function distToSegment(p, a, b) {
   const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * ex + (p.y - a.y) * ey) / l2)) : 0;
   return Math.hypot(p.x - (a.x + ex * t), p.y - (a.y + ey * t));
 }
+
+// Clear gaps between facing walls of other rooms, around the given points
+// (the corners a room is being drawn from), so a room can be drawn to fill
+// them. Measured between the faces of the wall bands. Each is
+// { x1, y1, x2, y2, distM }.
+export function roomGapsNear(rooms, geom, roomId, near, thicknessM = DEFAULT_WALL_THICKNESS_M, maxGap = 10, reach = 0.4) {
+  const others = rooms.filter((r) => r.id !== roomId && r.walls.length);
+  const walls = others.flatMap((r) => {
+    const pts = geom.get(r.id).points;
+    return r.walls.map((_, i) => (pts[i + 1] ? { room: r, f: wallFrame(pts, i) } : null)).filter((w) => w && w.f.len > 0.05);
+  });
+  const gaps = [];
+  walls.forEach((A) => {
+    walls.forEach((B) => {
+      if (A.room === B.room) return;
+      if (dot(A.f.n, B.f.n) > -0.999) return;
+      // the two faces looking at each other
+      const fa = { x: A.f.a.x + A.f.n.x * thicknessM, y: A.f.a.y + A.f.n.y * thicknessM };
+      const fb = { x: B.f.a.x + B.f.n.x * thicknessM, y: B.f.a.y + B.f.n.y * thicknessM };
+      const gap = dot(sub(fb, fa), A.f.n);
+      if (gap < 0.05 || gap > maxGap) return;
+      // where they overlap, along A
+      const b0 = dot(sub(fb, fa), A.f.u);
+      const b1 = b0 + dot(B.f.u, A.f.u) * B.f.len;
+      const lo = Math.max(0, Math.min(b0, b1));
+      const hi = Math.min(A.f.len, Math.max(b0, b1));
+      if (hi - lo < 0.1) return;
+      // only gaps next to where the room is being drawn
+      const nearIt = near.some((p) => {
+        const along = dot(sub(p, fa), A.f.u);
+        const across = dot(sub(p, fa), A.f.n);
+        return along > lo - reach && along < hi + reach && across > -reach && across < gap + reach;
+      });
+      if (!nearIt) return;
+      const m = (lo + hi) / 2;
+      const p1 = { x: fa.x + A.f.u.x * m, y: fa.y + A.f.u.y * m };
+      // nothing else in between
+      const heading = (Math.atan2(A.f.n.x, -A.f.n.y) * 180) / Math.PI;
+      const run = clearRunTo(rooms, geom, roomId, p1, heading, thicknessM, maxGap + 1);
+      if (!run || run.roomId !== B.room.id || Math.abs(run.distM - gap) > 0.01) return;
+      // each gap once
+      if (gaps.some((g) => Math.abs(g.distM - gap) < 0.005 &&
+        Math.hypot((g.x1 + g.x2) / 2 - (p1.x + run.x) / 2, (g.y1 + g.y2) / 2 - (p1.y + run.y) / 2) < 0.5)) return;
+      gaps.push({ x1: p1.x, y1: p1.y, x2: run.x, y2: run.y, distM: gap });
+    });
+  });
+  return gaps;
+}

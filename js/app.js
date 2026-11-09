@@ -8,7 +8,7 @@ import * as rm from './rooms.js';
 import { exportPlan } from './export.js';
 
 // Shown at the foot of the page; keep in step with CACHE_NAME in service-worker.js.
-const APP_VERSION = 28;
+const APP_VERSION = 29;
 
 const $ = (sel) => document.querySelector(sel);
 const uid = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -323,6 +323,30 @@ function renderMatchChips() {
   // up to the next room's wall in this direction
   const [gap] = gapDims();
   if (gap) addMatchChip(`to ${gap.to}`, gap.distM);
+  // gaps between neighbouring rooms running the same way
+  const rad = (heading * Math.PI) / 180;
+  roomGaps()
+    .filter((rg) => {
+      const len = Math.hypot(rg.x2 - rg.x1, rg.y2 - rg.y1) || 1;
+      const along = Math.abs(((rg.x2 - rg.x1) * Math.sin(rad) - (rg.y2 - rg.y1) * Math.cos(rad)) / len);
+      return along > 0.999 && !(gap && Math.abs(gap.distM - rg.distM) < 0.0005);
+    })
+    .slice(0, 2)
+    .forEach((rg) => addMatchChip('gap', rg.distM));
+}
+
+// Clear gaps between the rooms around the corners this room is drawn from.
+function roomGaps() {
+  const room = activeRoom();
+  if (!room || ui.moving || ui.placingRoom || ui.placement) return [];
+  const g = geometryOf(room);
+  if (!ui.editingId && rm.roomClosed(room, g)) return [];
+  const near = [g.points[0], g.points[entryIndex()], g.target].filter(Boolean); // start, open end, where it closes
+  if (!near.length) return [];
+  const runs = gapDims();
+  return rm.roomGapsNear(state.rooms, rm.roomGeometry(state.rooms), room.id, near)
+    .filter((rg) => !runs.some((r) => Math.abs(r.distM - rg.distM) < 0.0005)) // already shown
+    .map((rg) => ({ ...rg, label: units.formatLength(rg.distM, state.unit) }));
 }
 
 // Clear runs from the corner the next wall starts at to the nearest other
@@ -436,7 +460,7 @@ function drawPlan() {
     activeRoomId: state.activeRoomId,
     selectedWallId: ui.panelWallId,
     previewLine: previewLine(),
-    gapDims: gapDims(),
+    gapDims: [...gapDims(), ...roomGaps()],
     viewBox,
   });
   els.planWrap.classList.toggle('zoomed', !!ui.view);
