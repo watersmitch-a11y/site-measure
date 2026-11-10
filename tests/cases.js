@@ -128,6 +128,26 @@ const tests = [
       ], activeRoomId: 'r8' });
       await addWall(page, 180, 1780); await addWall(page, 270, 3180); await addWall(page, 0, 1780);
       await page.click('#moveRoomBtn');
+      // this room only, to start with: Room 3 (r8) comes off its shared wall
+      assert.equal(await page.isVisible('#moveScope'), true);
+      await page.click('#nudgePad button[data-dx="1"]');
+      await page.click('#cancelMoveBtn');
+      let c = await saved(page);
+      assert.equal(c.rooms.find((r) => r.id === 'r8').anchor.type, 'wall', 'cancel puts the shared wall back');
+      assert.equal(c.rooms.find((r) => r.id === 'r8').walls.length, 3);
+      await page.click('#moveRoomBtn');
+      await page.click('#nudgePad button[data-dx="1"]');
+      await page.click('#nudgePad button[data-dx="1"]');
+      await page.click('#doneMoveBtn');
+      c = await saved(page);
+      const freed = c.rooms.find((r) => r.id === 'r8');
+      assert.equal(freed.anchor.type, 'fixed');
+      assert.equal(freed.walls.length, 4, 'it has the shared wall as its own now');
+      assert.equal(c.rooms.find((r) => r.id === 'r3').anchor.x, 2.9, 'Room 2 stays put');
+      await page.click('#undoActionBtn');
+      // now with the joined rooms
+      await page.click('#moveRoomBtn');
+      await page.click('#moveScope [data-scope="group"]');
       assert.match(await page.textContent('#moveTitle'), /with Room 1, Room 2 \(joined\)/);
       await page.click('#nudgePad button[data-dx="1"]');
       await page.click('#doneMoveBtn');

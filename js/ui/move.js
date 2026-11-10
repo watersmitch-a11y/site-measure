@@ -8,28 +8,56 @@ import { $, activeLabel, activeRoom, allWalls, els, geometryOf, levelRooms, norm
 import { closeWallPanel, planEnds, roomSide } from './walls.js';
 import { persist } from './history.js';
 import { render } from './view.js';
-import { showInSheet } from './layout.js';
+import { setSheetSize, showInSheet } from './layout.js';
 
 // A room can be dragged, nudged and turned, or lined up with another room by
-// a doorway measured in both. Rooms joined to it (by a shared wall, or walls
-// touching) move with it as one group; Separate in the room card unjoins it.
+// a doorway measured in both, on its own or with the rooms joined to it (by a
+// shared wall, or walls touching).
 export function canMove(room) {
   return room.walls.length > 0;
 }
 
-export function startMove() {
+// scope 'room': just this room (and rooms hanging off its walls) moves; a
+// room hanging off another's wall gets that wall as its own and is free to
+// go anywhere (still joined while it touches). scope 'group': every room
+// joined to it moves too. The choice is remembered while the app's open.
+export function startMove(scope = ui.moveScope || 'room') {
   const room = activeRoom();
   if (!canMove(room)) return;
   closeWallPanel();
+  const here = levelRooms();
   const geom = rm.roomGeometry(state.rooms);
-  const group = rm.joinedRooms(levelRooms(), geom, room);
-  const roots = rm.groupRoots(group);
+  const joined = rm.joinedRooms(here, geom, room);
+  const alone = scope === 'room' || joined.length < 2;
+  let group = joined;
+  if (alone) {
+    // this room plus any rooms hanging off it, however deep
+    const ids = new Set([room.id]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      here.forEach((r) => {
+        if (!ids.has(r.id) && r.anchor && r.anchor.type === 'wall' && ids.has(r.anchor.roomId)) {
+          ids.add(r.id);
+          grew = true;
+        }
+      });
+    }
+    group = here.filter((r) => ids.has(r.id));
+  }
+  const roots = alone ? [room] : rm.groupRoots(group);
   ui.moving = {
     roomId: room.id,
+    scope: alone ? 'room' : 'group',
+    joinedCount: joined.length,
     groupIds: group.map((r) => r.id),
     rootIds: roots.map((r) => r.id),
-    before: JSON.stringify(roots.map((r) => ({ id: r.id, anchor: r.anchor, first: r.walls[0] ? r.walls[0].angle : null }))),
+    // how to put things back on Cancel (a room set free gets a wall of its own)
+    before: JSON.stringify(roots.map((r) => ({ id: r.id, anchor: r.anchor, walls: r.walls }))),
   };
+  if (alone && room.anchor && room.anchor.type === 'wall') {
+    rm.pinAttachedRooms(state.rooms, (a) => a === room.anchor);
+  }
   // the rooms holding the group's position become free-standing at where they are
   roots.forEach((r) => {
     if (!r.anchor || r.anchor.type !== 'fixed') {
@@ -38,13 +66,31 @@ export function startMove() {
     }
   });
   const others = group.filter((r) => r !== room).map((r) => rm.roomLabel(r, roomIndex(r)));
-  els.moveTitle.textContent = others.length
-    ? `Moving ${activeLabel()} with ${others.join(', ')} (joined): drag, or nudge`
-    : `Moving ${activeLabel()}: drag it on the plan, or nudge it`;
+  els.moveTitle.textContent = alone
+    ? `Moving ${activeLabel()}${others.length ? ` (with ${others.join(', ')} on its walls)` : ''}: drag it, or nudge it`
+    : `Moving ${activeLabel()} with ${others.join(', ')} (joined): drag, or nudge`;
+  // the choice only matters when the room's joined to others
+  const scopeBox = $('#moveScope');
+  scopeBox.classList.toggle('hidden', joined.length < 2);
+  scopeBox.querySelectorAll('[data-scope]').forEach((b) => b.classList.toggle('selected', b.dataset.scope === ui.moving.scope));
   els.moveBar.classList.remove('hidden');
   els.planWrap.classList.add('moving');
+  // the sheet shrinks to the move controls, giving the plan the room
+  if (!('sheetBeforeMove' in ui) || ui.sheetBeforeMove == null) ui.sheetBeforeMove = ui.sheetSize;
+  setSheetSize('low');
   render();
   showInSheet(els.moveBar);
+}
+
+// Switch between moving this room only and moving it with its joined rooms:
+// starts the move again from where things were.
+export function setMoveScope(scope) {
+  if (!ui.moving || ui.moving.scope === scope) return;
+  ui.moveScope = scope;
+  ui.switchingScope = true;
+  endMove(false);
+  ui.switchingScope = false;
+  startMove(scope);
 }
 
 export function endMove(keep) {
@@ -55,11 +101,15 @@ export function endMove(keep) {
       const r = state.rooms.find((x) => x.id === b.id);
       if (!r) return;
       r.anchor = b.anchor;
-      if (r.walls[0] && b.first != null) r.walls[0].angle = b.first;
+      r.walls = b.walls;
     });
   }
   ui.moving = null;
   els.moveBar.classList.add('hidden');
+  if (ui.sheetBeforeMove && !ui.switchingScope) {
+    setSheetSize(ui.sheetBeforeMove);
+    ui.sheetBeforeMove = null;
+  }
   els.planWrap.classList.remove('placing', 'moving');
   els.doorMatchPanel.classList.add('hidden');
   persist();

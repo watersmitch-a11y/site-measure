@@ -54,6 +54,10 @@
       <div id="sheetScroll" class="sheet-scroll">
     <div id="moveBar" class="move-bar hidden">
       <div class="move-title" id="moveTitle">Drag the room on the plan, or nudge it</div>
+      <div id="moveScope" class="move-scope hidden" role="group" aria-label="What moves">
+        <button type="button" data-scope="room">This room only</button>
+        <button type="button" data-scope="group">With joined rooms</button>
+      </div>
       <!-- fixed height, so the plan below doesn't shift while dragging -->
       <div id="moveDims" class="move-dims">
         <div class="move-dims-ref" id="moveDimsRef"></div>

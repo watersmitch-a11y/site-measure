@@ -957,3 +957,6 @@ body.site-mode .pad-key { height: 2.9rem; }
 .pad-key:disabled { opacity: 0.3; }
 /* the chips row keeps its space, so the sheet (and the plan) don't jump as chips come and go */
 .sheet #matchChips { min-height: 2.1rem; margin-top: 0.4rem; flex-wrap: nowrap; overflow-x: auto; }
+.move-scope { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem; margin: 0.4rem 0 0.5rem; }
+.move-scope button { padding: 0.55rem 0.3rem; border-radius: 9px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-dim); font-size: 0.85rem; font-weight: 600; }
+.move-scope button.selected { border-color: var(--accent); background: var(--accent-dim); color: var(--accent); }

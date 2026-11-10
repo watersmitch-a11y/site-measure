@@ -11,7 +11,7 @@ import * as laser from '../laser.js';
 import { $, activeRoom, allWalls, els, geometryOf, levelRooms, round3, state, ui } from './core.js';
 import { ROOM_DETAIL_FIELDS, closeRoomPanel, fillSharedSpan, handleCreateRoom, handleDeleteRoom, handleDiagCheck, handleDiagFix, handlePlacementTap, handleSeparateRoom, handleSpreadGap, renderRoomTabs, saveRoomDetails, setActiveRoom, startPlacing, stopPlacing, svgPoint } from './room-ui.js';
 import { typePhotoNote, addPhoto, closePhoto, deleteOpenPhoto, openPhoto, photoUrl } from './photo-ui.js';
-import { applyMoveDim, endMove, handleDoorMatch, movingRoom, movingRoots, openDoorMatch, rotateMoving, shiftGroup, startMove, updateMoveDims } from './move.js';
+import { setMoveScope, applyMoveDim, endMove, handleDoorMatch, movingRoom, movingRoots, openDoorMatch, rotateMoving, shiftGroup, startMove, updateMoveDims } from './move.js';
 import { buildCeilingInput, buildLengthInputs, handleAddWall, handleClosePolygon, handleDeleteWall, handleEditWall, handleUndo, renderEntryTitle, renderMatchChips, resetEntryForm, setCustomSide, setSelectedHeading } from './entry.js';
 import { planAspect, clampViewWidth, drawPlan, nearestHitLine, planFraction, render, renderStats, roomAtPoint, shownView, touchDist, touchMid, zoomAt, zoomFit } from './view.js';
 import { typeDetails, closeDetails, closeExport, currentJob, exportFailed, handleDeleteJob, handleLoadJob, handleNewJob, openDetails, renderJobsPanel, setSiteMode } from './jobs.js';
@@ -462,7 +462,11 @@ $('#thicknessInputs').addEventListener('input', () => {
 
 els.createRoomBtn.addEventListener('click', handleCreateRoom);
 
-els.moveRoomBtn.addEventListener('click', startMove);
+els.moveRoomBtn.addEventListener('click', () => startMove());
+$('#moveScope').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-scope]');
+  if (b) setMoveScope(b.dataset.scope);
+});
 
 els.separateRoomBtn.addEventListener('click', handleSeparateRoom);
 
@@ -582,9 +586,8 @@ els.finishInsertBtn.addEventListener('click', () => {
   render();
 });
 
-els.panelMoveRoomBtn.addEventListener('click', startMove);
+els.panelMoveRoomBtn.addEventListener('click', () => startMove());
 
- // startMove closes the wall panel
 els.doneMoveBtn.addEventListener('click', () => endMove(true));
 
 els.cancelMoveBtn.addEventListener('click', () => endMove(false));
