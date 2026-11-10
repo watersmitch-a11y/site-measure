@@ -609,7 +609,6 @@ main {
 
 /* ---------- match opposite wall ---------- */
 .match-chips { margin-top: 0.5rem; }
-.match-chips:empty { display: none; }
 .chip.match { color: var(--accent); border-color: var(--accent-dim); padding: 0.45rem 0.8rem; font-size: 0.85rem; }
 .chip.match.selected { background: var(--accent-dim); border-color: var(--accent); }
 
@@ -831,3 +830,130 @@ body.site-mode .wall-tab { padding: 0.7rem 0.2rem; }
 .photo-add.primary-btn { display: block; text-align: center; cursor: pointer; }
 #wallPanel .wall-panel-inner { min-height: 70vh; }
 .update-row { display: flex; align-items: center; justify-content: space-between; margin-top: 0.8rem; font-size: 0.85rem; color: var(--text-dim); }
+
+/* =====================================================================
+   v39 · Layout A: the plan fills the screen; measuring happens in a sheet
+   docked at the bottom, with its own number pad.
+   ===================================================================== */
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+#app {
+  max-width: none;
+  height: 100dvh;
+  min-height: 0;
+  padding-bottom: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* header: job name, undo, redo, menu; then the room chips */
+.app-header { position: relative; padding: 0.45rem 0.75rem 0.4rem; padding-top: max(0.45rem, env(safe-area-inset-top)); }
+.app-header .job-row { gap: 0.4rem; margin-bottom: 0.35rem; }
+.job-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.job-name-input { font-size: 1.1rem; padding: 0.1rem 0; width: 100%; }
+.save-state { text-align: left; margin: 0; font-size: 0.68rem; min-height: 0.9em; line-height: 1; }
+.icon-btn svg { width: 20px; height: 20px; fill: currentColor; display: block; margin: auto; }
+.room-row { display: flex; align-items: center; gap: 0.4rem; }
+.room-row .room-tabs { flex: 1; min-width: 0; margin: 0; padding: 0; }
+.room-row .level-select { flex: 0 0 auto; max-width: 9.5rem; padding: 0.35rem 0.4rem; font-size: 0.8rem; }
+.room-tab { padding: 0.3rem 0.75rem; }
+
+/* the plan takes whatever height the sheet leaves */
+main.layout { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0; }
+.plan-area { flex: 1; min-height: 0; position: relative; padding: 0.4rem 0.5rem 0; }
+.plan-wrap { aspect-ratio: auto; height: 100%; position: relative; border-radius: 12px; }
+
+/* things that float over the plan */
+.plan-wrap .place-banner { position: absolute; top: 0.5rem; left: 0.5rem; right: 0.5rem; margin: 0; z-index: 3; }
+.plan-wrap .zoom-controls { position: absolute; top: 0.5rem; right: 0.5rem; bottom: auto; display: flex; flex-direction: column; gap: 0.3rem; z-index: 2; }
+.plan-wrap .zoom-btn { min-width: 34px; height: 34px; font-size: 1.05rem; padding: 0; opacity: 0.85; }
+.plan-wrap .zoom-btn.zoom-fit { font-size: 0.7rem; }
+.plan-wrap.placing .zoom-controls { top: 4.2rem; }
+.plan-wrap .stats-bar {
+  position: absolute; left: 0.5rem; bottom: 0.5rem; right: 3.2rem; margin: 0; padding: 0;
+  display: flex; flex-wrap: wrap; gap: 0.3rem; z-index: 2; pointer-events: auto; cursor: pointer;
+}
+.plan-wrap .stats-bar .stat-pill { font-size: 0.72rem; padding: 0.22rem 0.55rem; background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(2px); }
+.plan-wrap .stats-bar:not(.expanded) .stat-pill.minor { display: none; }
+
+/* the sheet */
+.sheet {
+  flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0;
+  background: var(--surface); border-top: 1px solid var(--border);
+  border-radius: 18px 18px 0 0; margin-top: 0.4rem;
+  box-shadow: 0 -6px 20px rgba(0, 0, 0, 0.35);
+  padding-bottom: env(safe-area-inset-bottom);
+  transition: height 0.18s ease;
+}
+.sheet-handle { display: block; width: 100%; height: 22px; border: 0; background: transparent; padding: 0; cursor: grab; touch-action: none; flex: none; }
+.sheet-handle span { display: block; width: 42px; height: 5px; border-radius: 3px; background: var(--border); margin: 0 auto; }
+.sheet-scroll { overflow-y: auto; overscroll-behavior: contain; padding: 0 0.75rem; min-height: 0; flex: 1; }
+.sheet[data-size="low"] .sheet-scroll { max-height: var(--peek, 40vh); flex: none; }
+.sheet[data-size="half"] { height: 56dvh; }
+.sheet[data-size="full"] { height: calc(100dvh - 5.5rem); }
+.sheet-scroll .entry-card,
+.sheet-scroll .wall-list-section,
+.sheet-scroll .room-card { margin: 0 0 0.6rem; border: 0; background: transparent; padding: 0.2rem 0 0.6rem; border-radius: 0; }
+.sheet-scroll .wall-list-section, .sheet-scroll .room-card { border-top: 1px solid var(--border); padding-top: 0.8rem; }
+.sheet-scroll .entry-card h2 { margin: 0 0 0.4rem; font-size: 1rem; }
+.sheet-scroll .field-label { margin-top: 0.15rem; }
+.sheet-scroll .app-version { padding-bottom: 0.6rem; }
+
+/* compact wall entry: arrows in one row, the length beside Add Wall */
+.length-row { display: flex; gap: 0.5rem; align-items: stretch; }
+.length-row .length-inputs { flex: 1; min-width: 0; margin: 0; }
+.length-row #addWallBtn { flex: 0 0 auto; width: auto; margin: 0; padding: 0 1.1rem; white-space: nowrap; }
+.length-row input { font-size: 1.35rem; font-weight: 600; }
+.length-label { margin-bottom: 0.3rem; }
+
+/* number pad for wall lengths: big keys, sums built in */
+.num-pad { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.35rem; padding: 0.5rem 0.75rem 0.6rem; border-top: 1px solid var(--border); flex: none; }
+.pad-key { height: 2.75rem; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: 1.25rem; font-weight: 500; touch-action: manipulation; user-select: none; }
+.pad-key:active { background: var(--accent-dim); border-color: var(--accent); }
+.pad-key.op { color: var(--accent); background: var(--bg); }
+.pad-key[data-key="kb"], .pad-key[data-key="laser"] { font-size: 1.1rem; }
+body.pad-off .pad-key[data-key="kb"] { background: var(--accent-dim); }
+/* the pad shows while a wall's being entered, unless the phone keyboard's in use */
+.num-pad { display: none; }
+body.entering:not(.typing):not(.pad-off) .sheet:not([data-size="full"]) .num-pad { display: grid; }
+body:not(.pad-off) #lengthInputs .calc-btn { display: none; }
+
+/* moving a room: the sheet holds just the move controls */
+body.moving-room .sheet-entry { display: none; }
+body.moving-room .sheet-scroll .move-bar { margin: 0 0 0.6rem; }
+
+/* the menu */
+.menu-panel { position: fixed; inset: 0; z-index: 70; background: rgba(0, 0, 0, 0.25); }
+.menu-card {
+  position: absolute; top: calc(env(safe-area-inset-top) + 3.2rem); right: 0.6rem; width: min(17rem, calc(100vw - 1.2rem));
+  background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 0.35rem;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45); max-height: calc(100dvh - 4rem); overflow-y: auto;
+}
+.menu-item { display: flex; align-items: center; justify-content: space-between; width: 100%; text-align: left; background: transparent; border: 0; color: var(--text); font-size: 0.95rem; padding: 0.7rem 0.75rem; border-radius: 9px; gap: 0.6rem; }
+.menu-item:active, .menu-item:hover { background: var(--surface-2); }
+.menu-item.danger-text { color: var(--red); }
+.menu-field select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0.3rem 0.4rem; font-size: 0.85rem; }
+.menu-sep { height: 1px; background: var(--border); margin: 0.3rem 0.5rem; }
+#siteModeBtn.selected { color: var(--accent); }
+#siteModeBtn.selected::after { content: '✓'; }
+
+/* tablets and phones on their side: plan on the left, measuring on the right */
+@media (min-width: 820px), (orientation: landscape) and (min-width: 600px) {
+  main.layout { flex-direction: row; }
+  .plan-area { padding: 0.5rem; }
+  .sheet, .sheet[data-size="half"], .sheet[data-size="full"] {
+    width: min(26rem, 46vw); height: auto; margin: 0; border-radius: 0; border-top: 0; border-left: 1px solid var(--border);
+    box-shadow: none;
+  }
+  .sheet[data-size="low"] .sheet-scroll { max-height: none; flex: 1; }
+  .sheet-handle { display: none; }
+  body.entering:not(.typing):not(.pad-off) .sheet .num-pad { display: grid; }
+}
+/* with the pad on, the length box says what it is and the laser's on the pad */
+body:not(.pad-off) .sheet .length-label { display: none; }
+.sheet .direction-section .field-label { margin-bottom: 0.25rem; }
+.pad-key { height: 2.55rem; }
+body.site-mode .pad-key { height: 2.9rem; }
+.pad-key[data-key="laser"].connected { background: color-mix(in srgb, var(--green) 25%, var(--bg)); border-color: var(--green); }
+.pad-key:disabled { opacity: 0.3; }
+/* the chips row keeps its space, so the sheet (and the plan) don't jump as chips come and go */
+.sheet #matchChips { min-height: 2.1rem; margin-top: 0.4rem; flex-wrap: nowrap; overflow-x: auto; }

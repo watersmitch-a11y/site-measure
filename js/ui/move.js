@@ -8,6 +8,7 @@ import { $, activeLabel, activeRoom, allWalls, els, geometryOf, levelRooms, norm
 import { closeWallPanel, planEnds, roomSide } from './walls.js';
 import { persist } from './history.js';
 import { render } from './view.js';
+import { showInSheet } from './layout.js';
 
 // A room can be dragged, nudged and turned, or lined up with another room by
 // a doorway measured in both. Rooms joined to it (by a shared wall, or walls
@@ -43,7 +44,7 @@ export function startMove() {
   els.moveBar.classList.remove('hidden');
   els.planWrap.classList.add('moving');
   render();
-  els.moveBar.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  showInSheet(els.moveBar);
 }
 
 export function endMove(keep) {

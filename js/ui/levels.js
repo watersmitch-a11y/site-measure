@@ -16,6 +16,8 @@ export function renderLevelBar() {
     sel.add(new Option(`${name}${n ? ` (${n} room${n > 1 ? 's' : ''})` : ''}`, name, false, name === state.level));
   });
   $('#deleteLevelBtn').classList.toggle('hidden', !canDeleteLevel());
+  // the level picker only shows once there's more than one level
+  sel.classList.toggle('hidden', state.levels.length < 2);
 }
 
 // A room made just because a level was opened, and never used.

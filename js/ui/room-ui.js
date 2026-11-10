@@ -9,6 +9,7 @@ import { anchorDescription, buildCeilingInput, resetEntryForm } from './entry.js
 import { canMove, endMove } from './move.js';
 import { persist, saveSoon } from './history.js';
 import { render } from './view.js';
+import { showInSheet } from './layout.js';
 import { renderPhotoStrip } from './photo-ui.js';
 import { showAlert, showConfirm } from './dialogs.js';
 
@@ -236,7 +237,6 @@ export function startPlacing() {
   els.placeBanner.classList.remove('hidden');
   els.planWrap.classList.add('placing');
   render();
-  els.placeBanner.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 export function stopPlacing() {
@@ -402,7 +402,7 @@ export function createRoom(anchor, walls = []) {
   room.ceilingHeightM = lastCeiling ? lastCeiling.ceilingHeightM : null;
   state.rooms.push(room);
   setActiveRoom(room.id);
-  els.entryTitle.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  showInSheet(els.entryTitle);
 }
 
 export async function handleDeleteRoom() {

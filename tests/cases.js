@@ -40,6 +40,8 @@ async function addWall(page, heading, mm) {
 
 async function tapWall(page, wallId) {
   await page.$eval('#planSvg', (e) => e.scrollIntoView({ block: 'center' }));
+  // let any redraw from the sheet changing height land first
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   const box = await page.$eval(`.plan-hit[data-wall-id="${wallId}"]`, (l) => {
     const r = l.getBoundingClientRect();
     return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
@@ -210,13 +212,13 @@ const tests = [
       await page.click('#closeWallPanelBtn');
       assert.deepEqual((await saved(page)).rooms[0].photos.map((p) => p.note), ['cracked plaster']);
 
-      await page.click('#exportBtn');
+      await page.click('#menuBtn'); await page.click('#exportBtn');
       await page.click('#exportPdfBtn');
       await page.waitForFunction(() => window.__printed === 1);
       assert.equal((await page.$$('#printView .print-photos img')).length, 1);
       assert.match(await page.textContent('#printView'), /230 mm wall/);
 
-      await page.click('#exportBtn');
+      await page.click('#menuBtn'); await page.click('#exportBtn');
       const [dxf] = await Promise.all([page.waitForEvent('download'), page.click('#exportDxfBtn')]);
       assert.equal(dxf.suggestedFilename(), 'Test-Job.dxf');
       const text = fs.readFileSync(await dxf.path(), 'utf8').split('\r\n');
@@ -225,7 +227,7 @@ const tests = [
       assert.equal(values[values.length - 1], 'EOF');
       assert.ok(values.filter((v) => v === 'POLYLINE').length >= 8 && values.includes('ARC'), 'walls and door swing in the DXF');
 
-      await page.click('#exportBtn');
+      await page.click('#menuBtn'); await page.click('#exportBtn');
       const [jf] = await Promise.all([page.waitForEvent('download'), page.click('#exportJobBtn')]);
       const file = path.join(tmp, 'job.json');
       await jf.saveAs(file);
@@ -235,7 +237,7 @@ const tests = [
 
       const other = await (await browser.newContext({ viewport: { width: 412, height: 915 }, serviceWorkers: 'block' })).newPage();
       await other.goto(base);
-      await other.click('#jobsBtn');
+      await other.click('#menuBtn'); await other.click('#jobsBtn');
       await other.setInputFiles('#importJobInput', file);
       await other.waitForFunction(() => document.querySelector('#jobName').value === 'Test/Job');
       await other.waitForSelector('#roomPhotos .photo-thumb img[src^="blob:"]');
@@ -271,7 +273,7 @@ const tests = [
     async run({ page, assert }) {
       await page.evaluate(() => localStorage.clear());
       await page.reload();
-      await page.click('#newJobBtn');
+      await page.click('#menuBtn'); await page.click('#newJobBtn');
       await page.waitForSelector('#detailsPanel:not(.hidden)');
       await page.fill('#detailAddress', '12 Smith St, Fitzroy VIC 3065');
       await page.fill('#detailClient', 'Acme Aged Care');
@@ -283,9 +285,9 @@ const tests = [
       assert.equal((await page.$$('.room-select option')).length, 7);
       await page.selectOption('.room-select', 'x4');
       assert.match(await page.textContent('#entryTitle'), /Room 4/);
-      await page.click('#siteModeBtn');
+      await page.click('#menuBtn'); await page.click('#siteModeBtn');
       assert.equal(await page.evaluate(() => getComputedStyle(document.documentElement).fontSize), '18px');
-      await page.click('#siteModeBtn');
+      await page.click('#menuBtn'); await page.click('#siteModeBtn');
     },
   },
   {
@@ -333,12 +335,12 @@ const tests = [
       assert.deepEqual(await texts(page, '.plan-fixture-label'), ['2×DGPO1']);
 
       await page.click('#addAnywayBtn'); // the room's closed, so the wall form is tucked away
-      await page.click('#laserBtn');
+      await page.click('#numPad [data-key="laser"]');
       await page.waitForFunction(() => document.querySelector('#laserBtn').textContent.includes('connected'));
       await page.evaluate(() => window.__laserSend(2.345));
       assert.equal(await page.inputValue('#lenSingle'), '2345');
 
-      await page.click('#addLevelBtn');
+      await page.click('#menuBtn'); await page.click('#addLevelBtn');
       await page.fill('.prompt-input', 'Level 1');
       await confirm(page);
       await addWall(page, 0, 2000); await addWall(page, 90, 2000); await addWall(page, 180, 2000); await addWall(page, 270, 2000);
@@ -346,7 +348,7 @@ const tests = [
       await page.selectOption('#levelSelect', 'Ground floor');
       const job = await saved(page);
       assert.deepEqual(job.levels, ['Ground floor', 'Level 1']);
-      await page.click('#exportBtn');
+      await page.click('#menuBtn'); await page.click('#exportBtn');
       await page.click('#exportPdfBtn');
       await page.waitForFunction(() => window.__printed === 1);
       assert.equal((await page.$$('#printView .print-plan')).length, 2);
@@ -440,7 +442,7 @@ const tests = [
       const walls = rect('r1', 4, 3, { c: [win] });
       walls[1].fixtures = [{ id: 'f1', type: 'gpo2', fromCorner: 'start', offsetM: 2, qty: 1 }];
       await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls, anchor: null }] });
-      await page.click('#exportBtn');
+      await page.click('#menuBtn'); await page.click('#exportBtn');
       await page.click('#exportPdfBtn');
       await page.waitForFunction(() => window.__printed === 1);
       await page.emulateMedia({ media: 'print' });
@@ -504,7 +506,7 @@ const tests = [
       const count = () => page.evaluate(() => import('./js/photos.js').then((m) => m.listPhotoIds()).then((k) => k.length));
       assert.equal(await count(), 1);
       // delete the job: its photo goes
-      await page.click('#jobsBtn');
+      await page.click('#menuBtn'); await page.click('#jobsBtn');
       await page.click('#jobsList .delete-btn');
       await confirm(page);
       await page.waitForFunction(() => import('./js/photos.js').then((m) => m.listPhotoIds()).then((k) => k.length === 0));
@@ -514,16 +516,16 @@ const tests = [
     name: 'empty levels can be deleted and leave no stray rooms',
     async run({ page, assert }) {
       await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 4, 3), anchor: null }] });
-      assert.equal(await page.isVisible('#deleteLevelBtn'), false);
-      await page.click('#addLevelBtn');
+      assert.equal(await page.$eval('#deleteLevelBtn', (b) => b.classList.contains('hidden')), true);
+      await page.click('#menuBtn'); await page.click('#addLevelBtn');
       await page.fill('.prompt-input', 'Level 1');
       await confirm(page);
-      assert.equal(await page.isVisible('#deleteLevelBtn'), true);
+      assert.equal(await page.$eval('#deleteLevelBtn', (b) => b.classList.contains('hidden')), false);
       await page.selectOption('#levelSelect', 'Ground floor');
       let job = await saved(page);
       assert.equal(job.rooms.length, 1, 'the unused room on Level 1 went');
       await page.selectOption('#levelSelect', 'Level 1');
-      await page.click('#deleteLevelBtn');
+      await page.click('#menuBtn'); await page.click('#deleteLevelBtn');
       await confirm(page);
       job = await saved(page);
       assert.deepEqual(job.levels, ['Ground floor']);
@@ -558,7 +560,7 @@ const tests = [
         await page.click(`#roomTabs .room-tab >> nth=${tab}`);
         assert.deepEqual(await overlaps('#planSvg text'), [], `screen, room ${tab + 1} selected`);
       }
-      await page.click('#exportBtn');
+      await page.click('#menuBtn'); await page.click('#exportBtn');
       await page.click('#exportPdfBtn');
       await page.waitForFunction(() => window.__printed === 1);
       await page.emulateMedia({ media: 'print' });
@@ -598,8 +600,60 @@ const tests = [
       await page.click('#entryTitle');
       await page.reload();
       assert.deepEqual(await texts(page, '.plan-room-name'), ['Kitchen']);
-      await page.click('#detailsBtn');
+      await page.click('#menuBtn'); await page.click('#detailsBtn');
       assert.match(await page.textContent('#versionText'), /Version \d+/);
+    },
+  },
+  {
+    name: 'number pad types lengths and sums; the sheet steps up and down; the menu',
+    async run({ page, assert }) {
+      await page.evaluate(() => localStorage.clear());
+      await page.reload();
+      const key = (k) => page.click(`#numPad [data-key="${k}"]`);
+      assert.equal(await page.isVisible('#numPad'), true, 'pad shows while entering a wall');
+      assert.equal(await page.$eval('#lenSingle', (i) => i.inputMode), 'none', 'no phone keyboard');
+      await page.click('#dirPad .pad-btn[data-heading="0"]');
+      for (const k of ['2', '5', '0', '0', '-', '(', '9', '2', '0', '/', '2', ')']) await key(k);
+      assert.equal(await page.inputValue('#lenSingle'), '2500-(920/2)');
+      await key('back');
+      await key(')');
+      await page.click('#addWallBtn');
+      const job = await saved(page);
+      assert.equal(mmOf(job.rooms[0].walls[0].lengthM), 2040);
+      // the phone keyboard instead
+      await key('kb');
+      assert.equal(await page.isVisible('#numPad'), false);
+      assert.equal(await page.$eval('#lenSingle', (i) => i.inputMode), 'decimal');
+      await page.reload();
+      assert.equal(await page.isVisible('#numPad'), false, 'remembered');
+      // the sheet: low → half → full → low
+      const size = () => page.$eval('#sheet', (e) => e.dataset.size);
+      const plan = () => page.$eval('#planSvg', (e) => e.getBoundingClientRect().height);
+      const low = await plan();
+      await page.click('#sheetHandle');
+      assert.equal(await size(), 'half');
+      await page.click('#sheetHandle');
+      assert.equal(await size(), 'full');
+      assert.ok(await plan() < low, 'plan gives way to the sheet');
+      await page.click('#sheetHandle');
+      assert.equal(await size(), 'low');
+      // the menu opens and closes
+      await page.click('#menuBtn');
+      assert.equal(await page.isVisible('#unitSelect'), true);
+      await page.mouse.click(10, 500);
+      assert.equal(await page.isVisible('#unitSelect'), false);
+    },
+  },
+  {
+    name: 'on a tablet the plan and the sheet sit side by side',
+    async run({ page, assert }) {
+      await page.setViewportSize({ width: 1024, height: 768 });
+      await loadJob(page, { rooms: [{ id: 'r1', number: 1, walls: rect('r1', 4, 3), anchor: null }] });
+      const plan = await page.$eval('#planSvg', (e) => e.getBoundingClientRect().toJSON());
+      const sheet = await page.$eval('#sheet', (e) => e.getBoundingClientRect().toJSON());
+      assert.ok(sheet.left >= plan.right - 1, 'sheet to the right of the plan');
+      assert.ok(plan.height > 500, `plan uses the height (${plan.height})`);
+      assert.equal(await page.isVisible('#sheetHandle'), false);
     },
   },
   {

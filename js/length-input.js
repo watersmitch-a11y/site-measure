@@ -101,7 +101,7 @@ function addCalculator(container, unitSuffixes) {
       const v = evaluateExpression(input.value);
       if (v == null) return;
       input.value = String(Math.round(v * 1000) / 1000);
-      input.inputMode = 'decimal';
+      input.inputMode = input.dataset.mode || 'decimal';
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
   });

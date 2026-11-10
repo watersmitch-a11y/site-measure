@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
 <meta name="theme-color" content="#1f6f43" />
 <title>Site Measure</title>
 <link rel="manifest" href="manifest.json" />
@@ -18,41 +18,40 @@
 
   <header class="app-header">
     <div class="job-row">
-      <input id="jobName" class="job-name-input" type="text" value="Untitled Job" aria-label="Job name" />
-      <button id="siteModeBtn" class="icon-btn" title="Site mode: bigger and brighter for outdoors" aria-label="Site mode">&#9728;</button>
-      <button id="undoActionBtn" class="icon-btn" title="Undo" aria-label="Undo" disabled>&#8630;</button>
-      <button id="redoActionBtn" class="icon-btn" title="Redo" aria-label="Redo" disabled>&#8631;</button>
-      <button id="jobsBtn" class="icon-btn" title="Jobs">&#128193;</button>
+      <div class="job-title">
+        <input id="jobName" class="job-name-input" type="text" value="Untitled Job" aria-label="Job name" />
+        <div id="saveState" class="save-state"></div>
+      </div>
+      <button id="undoActionBtn" class="icon-btn" title="Undo" aria-label="Undo" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7H4V2M4.5 7A9 9 0 1 1 3 13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button id="redoActionBtn" class="icon-btn" title="Redo" aria-label="Redo" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7h5V2M19.5 7A9 9 0 1 0 21 13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button id="menuBtn" class="icon-btn" title="Menu" aria-label="Menu" aria-haspopup="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>
     </div>
-    <div class="unit-row">
-      <label for="unitSelect">Units</label>
-      <select id="unitSelect">
-        <option value="mm">Millimetres</option>
-        <option value="ft-in">Feet &amp; Inches</option>
-        <option value="ft">Decimal Feet</option>
-        <option value="m">Metres</option>
-      </select>
-      <button id="newJobBtn" class="text-btn">New Job</button>
-      <button id="detailsBtn" class="text-btn">Details</button>
-      <button id="exportBtn" class="text-btn">Export</button>
+    <div class="room-row">
+      <select id="levelSelect" class="level-select hidden" aria-label="Level"></select>
+      <div id="roomTabs" class="room-tabs"></div>
     </div>
-    <div id="saveState" class="save-state"></div>
   </header>
 
-  <main>
-    <div id="levelBar" class="level-bar">
-      <select id="levelSelect" class="level-select" aria-label="Level"></select>
-      <button id="addLevelBtn" type="button" class="text-btn">+ Level</button>
-      <button id="renameLevelBtn" type="button" class="text-btn">Rename</button>
-      <button id="deleteLevelBtn" type="button" class="text-btn danger-text hidden">Delete</button>
-    </div>
-    <div id="roomTabs" class="room-tabs"></div>
-
-    <div id="placeBanner" class="place-banner hidden">
+  <main class="layout">
+    <div class="plan-area">
+      <div class="plan-wrap">
+        <svg id="planSvg" class="plan-svg" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet"></svg>
+        <div id="placeBanner" class="place-banner hidden">
       <span>Tap the shared wall, on the side the new room is on. Or tap open space for a separate room.</span>
       <button id="cancelPlaceBtn" type="button" class="text-btn">Cancel</button>
     </div>
+        <div id="statsBar" class="stats-bar" title="Tap for more figures"></div>
+        <div class="zoom-controls" aria-label="Zoom">
+          <button type="button" id="zoomInBtn" class="zoom-btn" aria-label="Zoom in">+</button>
+          <button type="button" id="zoomOutBtn" class="zoom-btn" aria-label="Zoom out">&minus;</button>
+          <button type="button" id="zoomFitBtn" class="zoom-btn zoom-fit hidden" aria-label="Show whole plan">Fit</button>
+        </div>
+      </div>
+    </div>
 
+    <section id="sheet" class="sheet" data-size="low" aria-label="Measuring">
+      <button type="button" id="sheetHandle" class="sheet-handle" aria-label="Show more or less"><span></span></button>
+      <div id="sheetScroll" class="sheet-scroll">
     <div id="moveBar" class="move-bar hidden">
       <div class="move-title" id="moveTitle">Drag the room on the plan, or nudge it</div>
       <!-- fixed height, so the plan below doesn't shift while dragging -->
@@ -96,21 +95,7 @@
       </div>
     </div>
 
-    <div class="plan-wrap">
-      <svg id="planSvg" class="plan-svg" viewBox="0 0 10 10" preserveAspectRatio="xMidYMid meet"></svg>
-
-    </div>
-
-    <div class="plan-tools">
-      <div class="zoom-controls" aria-label="Zoom">
-        <button type="button" id="zoomInBtn" class="zoom-btn" aria-label="Zoom in">+</button>
-        <button type="button" id="zoomOutBtn" class="zoom-btn" aria-label="Zoom out">&minus;</button>
-        <button type="button" id="zoomFitBtn" class="zoom-btn zoom-fit hidden" aria-label="Show whole plan">Fit</button>
-      </div>
-    </div>
-
-    <div id="statsBar" class="stats-bar"></div>
-
+        <div class="sheet-entry">
     <section id="entryCard" class="entry-card">
       <h2 id="entryTitle">Wall 1</h2>
 
@@ -122,7 +107,7 @@
       <div id="anchorFormNote" class="anchor-note hidden"></div>
 
       <div id="directionSection" class="direction-section">
-        <div class="field-label" id="directionLabel">Direction of this wall on the plan</div>
+        <div class="field-label" id="directionLabel">Direction</div>
         <div class="dir-pad" id="dirPad">
           <button type="button" class="pad-btn pad-up" data-heading="0" aria-label="Up"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 L20 11 H15.5 V21.5 H8.5 V11 H4 Z"/></svg></button>
           <button type="button" class="pad-btn pad-left" data-heading="270" aria-label="Left"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5 L20 11 H15.5 V21.5 H8.5 V11 H4 Z"/></svg></button>
@@ -152,11 +137,12 @@
         <div class="field-label length-label">Wall length
           <button id="laserBtn" type="button" class="text-btn laser-btn hidden">&#128207; Connect laser</button>
         </div>
-        <div id="lengthInputs" class="length-inputs"></div>
+        <div class="length-row">
+          <div id="lengthInputs" class="length-inputs"></div>
+          <button id="addWallBtn" type="submit" class="primary-btn">Add Wall</button>
+        </div>
         <div id="matchChips" class="preset-chips match-chips"></div>
       </div>
-
-      <button id="addWallBtn" type="submit" class="primary-btn">Add Wall</button>
       </form>
     </section>
 
@@ -217,8 +203,40 @@
         <input id="roomPhotoInput" type="file" accept="image/*" capture="environment" class="hidden" />
       </label>
     </section>
-    <p id="appVersion" class="app-version"></p>
+          <p id="appVersion" class="app-version"></p>
+        </div>
+      </div>
+      <div id="numPad" class="num-pad" aria-label="Number pad">
+        <button type="button" class="pad-key" data-key="7">7</button><button type="button" class="pad-key" data-key="8">8</button><button type="button" class="pad-key" data-key="9">9</button><button type="button" class="pad-key op" data-key="back" aria-label="Delete">⌫</button><button type="button" class="pad-key op" data-key="/">÷</button>
+        <button type="button" class="pad-key" data-key="4">4</button><button type="button" class="pad-key" data-key="5">5</button><button type="button" class="pad-key" data-key="6">6</button><button type="button" class="pad-key op" data-key="(">(</button><button type="button" class="pad-key op" data-key="*">×</button>
+        <button type="button" class="pad-key" data-key="1">1</button><button type="button" class="pad-key" data-key="2">2</button><button type="button" class="pad-key" data-key="3">3</button><button type="button" class="pad-key op" data-key=")">)</button><button type="button" class="pad-key op" data-key="-">−</button>
+        <button type="button" class="pad-key op" data-key="kb" aria-label="Phone keyboard">⌨</button><button type="button" class="pad-key" data-key="0">0</button><button type="button" class="pad-key" data-key=".">.</button><button type="button" class="pad-key op" data-key="laser" aria-label="Laser">📏</button><button type="button" class="pad-key op" data-key="+">+</button>
+      </div>
+    </section>
   </main>
+
+  <div id="menuPanel" class="menu-panel hidden">
+    <div class="menu-card" role="menu">
+      <button id="jobsBtn" type="button" class="menu-item" role="menuitem">Saved jobs</button>
+      <button id="newJobBtn" type="button" class="menu-item" role="menuitem">New job</button>
+      <button id="detailsBtn" type="button" class="menu-item" role="menuitem">Job details &amp; updates</button>
+      <button id="exportBtn" type="button" class="menu-item" role="menuitem">Export…</button>
+      <div class="menu-sep"></div>
+      <button id="addLevelBtn" type="button" class="menu-item" role="menuitem">Add a level</button>
+      <button id="renameLevelBtn" type="button" class="menu-item" role="menuitem">Rename this level</button>
+      <button id="deleteLevelBtn" type="button" class="menu-item danger-text hidden" role="menuitem">Delete this level</button>
+      <div class="menu-sep"></div>
+      <label class="menu-item menu-field">Units
+        <select id="unitSelect">
+          <option value="mm">Millimetres</option>
+          <option value="ft-in">Feet &amp; Inches</option>
+          <option value="ft">Decimal Feet</option>
+          <option value="m">Metres</option>
+        </select>
+      </label>
+      <button id="siteModeBtn" type="button" class="menu-item" role="menuitemcheckbox">Site mode (bright, bigger)</button>
+    </div>
+  </div>
 
   <div id="jobsPanel" class="jobs-panel hidden">
     <div class="jobs-panel-inner">

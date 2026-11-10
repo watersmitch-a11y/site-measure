@@ -13,7 +13,7 @@ import { ROOM_DETAIL_FIELDS, closeRoomPanel, fillSharedSpan, handleCreateRoom, h
 import { typePhotoNote, addPhoto, closePhoto, deleteOpenPhoto, openPhoto, photoUrl } from './photo-ui.js';
 import { applyMoveDim, endMove, handleDoorMatch, movingRoom, movingRoots, openDoorMatch, rotateMoving, shiftGroup, startMove, updateMoveDims } from './move.js';
 import { buildCeilingInput, buildLengthInputs, handleAddWall, handleClosePolygon, handleDeleteWall, handleEditWall, handleUndo, renderEntryTitle, renderMatchChips, resetEntryForm, setCustomSide, setSelectedHeading } from './entry.js';
-import { clampViewWidth, drawPlan, nearestHitLine, planFraction, render, renderStats, roomAtPoint, shownView, touchDist, touchMid, zoomAt, zoomFit } from './view.js';
+import { planAspect, clampViewWidth, drawPlan, nearestHitLine, planFraction, render, renderStats, roomAtPoint, shownView, touchDist, touchMid, zoomAt, zoomFit } from './view.js';
 import { typeDetails, closeDetails, closeExport, currentJob, exportFailed, handleDeleteJob, handleLoadJob, handleNewJob, openDetails, renderJobsPanel, setSiteMode } from './jobs.js';
 import { setWallTab, closeWallPanel, fillKeepClosed, handleBreakWall, handleDeleteFixture, handleDeleteOpening, handleSaveFixture, handleSaveOpening, handleUpdateLength, handleWallThickness, hideFixtureForm, hideOpeningForm, openWallPanel, panelWall, planEnds, roomSide, setFixtureTypeFields, setOpeningCorner, setOpeningHinge, setOpeningSwing, setOpeningType, showFixtureForm, showOpeningForm } from './walls.js';
 import { handleAddLevel, handleDeleteLevel, handleRenameLevel, switchLevel } from './levels.js';
@@ -78,7 +78,7 @@ els.undoBtn.addEventListener('click', handleUndo);
 els.undoActionBtn.addEventListener('click', undo);
 $('#addAnywayBtn').addEventListener('click', () => {
   ui.addAnyway = true;
-  renderEntryTitle();
+  render(); // the form, and the number pad with it, come back
   $('#lenSingle, #lenFeet').focus();
 });
 
@@ -158,7 +158,6 @@ els.wallList.addEventListener('click', (e) => {
     // light the wall up on the plan for a moment
     ui.locateWallId = locate.dataset.locate;
     drawPlan();
-    els.planWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
     clearTimeout(ui.locateTimer);
     ui.locateTimer = setTimeout(() => { ui.locateWallId = null; drawPlan(); }, 2500);
     return;
@@ -196,7 +195,7 @@ els.planSvg.addEventListener('touchstart', (e) => {
     const view = shownView();
     const mid = touchMid(e.touches);
     const { fx, fy } = planFraction(mid.x, mid.y);
-    ui.pinch = { dist: touchDist(e.touches), view, point: { x: view.x + fx * view.w, y: view.y + fy * view.w } };
+    ui.pinch = { dist: touchDist(e.touches), view, point: { x: view.x + fx * view.w, y: view.y + fy * view.h } };
     ui.pan = null;
     // a pinch while moving a room zooms instead: drop the drag and the view
     // it was holding still
@@ -216,7 +215,7 @@ els.planSvg.addEventListener('touchmove', (e) => {
     const w = clampViewWidth(ui.pinch.view.w * (ui.pinch.dist / Math.max(touchDist(e.touches), 1)));
     const mid = touchMid(e.touches);
     const { fx, fy } = planFraction(mid.x, mid.y);
-    ui.view = { x: ui.pinch.point.x - fx * w, y: ui.pinch.point.y - fy * w, w };
+    ui.view = { x: ui.pinch.point.x - fx * w, y: ui.pinch.point.y - fy * w * planAspect(), w };
     drawPlan();
   } else if (ui.pan && e.touches.length === 1) {
     e.preventDefault();

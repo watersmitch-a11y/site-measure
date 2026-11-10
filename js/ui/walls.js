@@ -8,6 +8,7 @@ import * as fx from '../fixtures.js';
 import { $, MEASURED_TO_KEY, activeLabel, activeRoom, allWalls, els, escapeHtml, geometryOf, roomIndex, state, ui, uid } from './core.js';
 import { canMove } from './move.js';
 import { drawPlan, render } from './view.js';
+import { showInSheet } from './layout.js';
 import { persist } from './history.js';
 import { renderPhotoStrip } from './photo-ui.js';
 import { renderWallList, resetEntryForm, settleSharedStart, sideName } from './entry.js';
@@ -478,7 +479,7 @@ export function handleBreakWall() {
   ui.insertRest = wasClosed ? rest.id : null; // shortened on Finish to keep the room closed
   persist();
   render();
-  $('#entryCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  showInSheet($('#entryCard'));
 }
 
 export function renderFixtureList() {

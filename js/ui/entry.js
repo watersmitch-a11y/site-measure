@@ -10,6 +10,7 @@ import { closeWallPanel, cornerLabels, roomSide, wallFitProblem } from './walls.
 import { flashInvalid, showAlert, showConfirm } from './dialogs.js';
 import { persist } from './history.js';
 import { render } from './view.js';
+import { showInSheet } from './layout.js';
 
 // True when Wall 1's direction comes from how the room was placed rather than
 // the arrows: rooms attached along a wall before tap-to-place existed, and
@@ -65,7 +66,7 @@ export function describeWall(wall, index) {
 }
 
 export function buildLengthInputs() {
-  buildLengthInput(els.lengthInputs, state.unit, 'len');
+  buildLengthInput(els.lengthInputs, state.unit, 'len', state.unit === 'ft-in' ? undefined : 'Wall length');
 }
 
 export function readLengthMeters() {
@@ -422,7 +423,7 @@ export function handleEditWall(id) {
   buildLengthInputs();
   setLength(state.unit, 'len', wall.lengthM);
   render();
-  els.entryTitle.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  showInSheet(els.entryTitle);
 }
 
 export async function handleDeleteWall(id) {

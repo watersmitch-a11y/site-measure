@@ -7,9 +7,11 @@ import { buildCeilingInput, buildLengthInputs, setCustomSide, setSelectedHeading
 import { flushPending, history, persist, resetHistory } from './ui/history.js';
 import { render } from './ui/view.js';
 import { cleanUpPhotos } from './ui/photo-ui.js';
+import { initLayout } from './ui/layout.js';
 import './ui/events.js'; // wires up the page
 
 function init() {
+  initLayout();
   buildLengthInputs();
   setSelectedHeading(null);
   setCustomSide('left');

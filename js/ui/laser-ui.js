@@ -29,6 +29,15 @@ export function laserReading(m) {
   $('#laserBtn').textContent = `📏 ${units.formatLength(m, state.unit)} ✓`;
 }
 
+// the laser key on the number pad shows when one's connected
+function padKey(on) {
+  const key = document.querySelector('#numPad [data-key="laser"]');
+  if (key) {
+    key.classList.toggle('connected', on);
+    key.title = on ? `${ui.laserName} connected` : 'Connect a Bluetooth laser';
+  }
+}
+
 export async function handleLaserBtn() {
   const btn = $('#laserBtn');
   if (ui.laserName) {
@@ -41,9 +50,11 @@ export async function handleLaserBtn() {
       ui.laserName = null;
       btn.textContent = '📏 Connect laser';
       btn.classList.remove('connected');
+      padKey(false);
     });
     btn.textContent = `📏 ${ui.laserName} connected`;
     btn.classList.add('connected');
+    padKey(true);
   } catch (err) {
     btn.textContent = '📏 Connect laser';
     if (err && err.name !== 'NotFoundError') showAlert(`Couldn't connect the laser: ${err.message}`);

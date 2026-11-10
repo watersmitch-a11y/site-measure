@@ -10,6 +10,7 @@ import { anchorDescription, entryIndex, gapDims, renderEntryTitle, renderMatchCh
 import { previewLine, renderRoomCard, renderRoomTabs, renderSquareCheck } from './room-ui.js';
 import { renderLevelBar } from './levels.js';
 import { updateMoveDims } from './move.js';
+import { updateLayout } from './layout.js';
 
 export function render() {
   els.jobName.value = state.jobName;
@@ -18,7 +19,7 @@ export function render() {
   const idx = entryIndex();
   const firstWallEntry = idx === 0;
   els.directionSection.classList.toggle('hidden', firstWallEntry && startHeadingFixed());
-  els.directionLabel.textContent = `Direction of Wall ${idx + 1} on the plan`;
+  els.directionLabel.textContent = "Direction on the plan";
   updateDirPad();
   renderMatchChips();
   const anchorText = anchorDescription(activeRoom());
@@ -45,11 +46,18 @@ export function render() {
   els.spreadGapBtn.classList.toggle('hidden', !(gapNow > 0.002 && state.walls.length >= rm.minWallsToClose(roomNow) + 1 &&
     gapNow <= 0.05 * state.walls.reduce((sum, w) => sum + w.lengthM, 0)));
   renderSquareCheck();
+  updateLayout();
+}
+
+// Height over width of the plan box on screen (the view is drawn to match it).
+export function planAspect() {
+  const r = els.planSvg.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 ? r.height / r.width : 1;
 }
 
 export function drawPlan() {
   let viewBox = ui.moving && ui.moving.viewBox;
-  if (!viewBox && ui.view) viewBox = { x: ui.view.x, y: ui.view.y, width: ui.view.w, height: ui.view.w };
+  if (!viewBox && ui.view) viewBox = { x: ui.view.x, y: ui.view.y, width: ui.view.w, height: ui.view.w * planAspect() };
   renderPlan(els.planSvg, levelRooms(), state.unit, {
     activeRoomId: state.activeRoomId,
     selectedWallId: ui.panelWallId || ui.locateWallId || ui.editingId,
@@ -57,18 +65,22 @@ export function drawPlan() {
     previewLine: previewLine(),
     gapDims: [...gapDims(), ...roomGaps()],
     viewBox,
+    box: (() => { const r = els.planSvg.getBoundingClientRect(); return { w: r.width, h: r.height }; })(),
   });
   els.planWrap.classList.toggle('zoomed', !!ui.view);
   els.zoomFitBtn.classList.toggle('hidden', !ui.view);
 }
 
-// The square of the plan currently on screen (the plan box is square, and the
-// whole-plan view is centred in it), so a screen fraction maps straight to it.
+// The part of the plan on screen, as { x, y, w, h } in plan metres: the box
+// has the plan area's own shape, with the whole-plan view centred in it, so a
+// screen fraction maps straight to it.
 export function shownView() {
-  if (ui.view) return { ...ui.view };
+  const aspect = planAspect();
+  if (ui.view) return { ...ui.view, h: ui.view.w * aspect };
   const fit = fitViewBox(levelRooms());
-  const w = Math.max(fit.width, fit.height);
-  return { x: fit.x - (w - fit.width) / 2, y: fit.y - (w - fit.height) / 2, w };
+  const w = Math.max(fit.width, fit.height / aspect);
+  const h = w * aspect;
+  return { x: fit.x - (w - fit.width) / 2, y: fit.y - (h - fit.height) / 2, w, h };
 }
 
 export function clampViewWidth(w) {
@@ -80,9 +92,9 @@ export function clampViewWidth(w) {
 export function zoomAt(fx, fy, factor) {
   const v = shownView();
   const px = v.x + fx * v.w;
-  const py = v.y + fy * v.w;
+  const py = v.y + fy * v.h;
   const w = clampViewWidth(v.w / factor);
-  ui.view = { x: px - fx * w, y: py - fy * w, w };
+  ui.view = { x: px - fx * w, y: py - fy * w * planAspect(), w };
   drawPlan();
 }
 
@@ -101,7 +113,7 @@ export function renderStats() {
   const room = activeRoom();
   const g = geometryOf(room);
   const perim = rm.roomPerimeter(state.rooms, room);
-  addPill(`Perimeter: <strong>${units.formatLength(perim, state.unit)}</strong>`);
+  addPill(`Perimeter: <strong>${units.formatLength(perim, state.unit)}</strong>`, false, true);
 
   const a = rm.roomArea(room, g);
   if (a != null) addPill(`Area: <strong>${units.formatArea(a, state.unit)}</strong>`);
@@ -119,20 +131,21 @@ export function renderStats() {
   const sharedArea = rm.sharedWallArea(state.rooms, room, state.ceilingHeightM);
   if (areas.wallsCounted > 0 || sharedArea > 0) {
     const partial = areas.wallsCounted < state.walls.length ? ' (some walls)' : '';
-    addPill(`Wall area net: <strong>${units.formatArea(areas.net + sharedArea, state.unit)}</strong>${partial}`);
+    addPill(`Wall area net: <strong>${units.formatArea(areas.net + sharedArea, state.unit)}</strong>${partial}`, false, true);
   }
 
   const geom = rm.roomGeometry(state.rooms);
   const measuredRooms = state.rooms.filter((r) => rm.roomArea(r, geom.get(r.id)) != null);
   if (state.rooms.length > 1 && measuredRooms.length > 0) {
     const total = measuredRooms.reduce((sum, r) => sum + rm.roomArea(r, geom.get(r.id)), 0);
-    addPill(`Job total: <strong>${units.formatArea(total, state.unit)}</strong> (${measuredRooms.length} rooms)`);
+    addPill(`Job total: <strong>${units.formatArea(total, state.unit)}</strong> (${measuredRooms.length} rooms)`, false, true);
   }
 }
 
-export function addPill(html, warn = false) {
+// minor figures only show over the plan when the stats are tapped open
+export function addPill(html, warn = false, minor = false) {
   const pill = document.createElement('div');
-  pill.className = 'stat-pill' + (warn ? ' warn' : '');
+  pill.className = 'stat-pill' + (warn ? ' warn' : '') + (minor ? ' minor' : '');
   pill.innerHTML = html;
   els.statsBar.appendChild(pill);
 }

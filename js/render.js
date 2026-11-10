@@ -148,7 +148,7 @@ export function fitViewBox(rooms) {
 // shared walls don't put two labels in the same gap, and no arrows/markers.
 // viewBox ({ x, y, width, height }) holds the view still, e.g. while dragging.
 export function renderPlan(svg, rooms, unit, {
-  activeRoomId = null, selectedWallId = null, previewLine = null, gapDims = [], print = false, viewBox = null, movingIds = null,
+  activeRoomId = null, selectedWallId = null, previewLine = null, gapDims = [], print = false, viewBox = null, movingIds = null, box = null,
 } = {}) {
   svg.innerHTML = '';
 
@@ -177,9 +177,16 @@ export function renderPlan(svg, rooms, unit, {
 
   svg.setAttribute('viewBox', `${viewMinX} ${viewMinY} ${width} ${height}`);
 
-  // print is viewed much larger than a phone screen, so finer lines and text
-  const strokeWidth = Math.max(width, height) * (print ? 0.005 : 0.012);
-  const fontSize = Math.max(width, height) * (print ? 0.024 : 0.045);
+  // On screen, text and lines are a set size in pixels (so they look the
+  // same on a phone or a tablet): `box` is the plan's size on screen. Print
+  // is viewed much larger than a phone screen, so finer lines and text.
+  let strokeWidth = Math.max(width, height) * (print ? 0.005 : 0.012);
+  let fontSize = Math.max(width, height) * (print ? 0.024 : 0.045);
+  if (!print && box && box.w > 0 && box.h > 0) {
+    const metresPerPx = Math.max(width / box.w, height / box.h);
+    fontSize = 15 * metresPerPx;
+    strokeWidth = 4 * metresPerPx;
+  }
   const tags = openingTags(rooms.flatMap((r) => r.walls));
   const fxTags = fixtureTags(rooms.flatMap((r) => r.walls));
 
